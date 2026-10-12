@@ -20,6 +20,7 @@ def engine():
         if url.startswith('postgres://'): url='postgresql://'+url[len('postgres://'):]
         if not url.startswith('postgresql://'):
             raise RuntimeError('Producción requiere PostgreSQL. SQLite no se admite en Streamlit Community Cloud.')
+            url = url.replace("postgresql://", "postgresql+psycopg://", 1)
         _engine=create_engine(url, pool_pre_ping=True, pool_size=3, max_overflow=2, pool_recycle=1200)
     return _engine
 
