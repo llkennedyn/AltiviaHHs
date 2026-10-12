@@ -48,3 +48,11 @@ Las pruebas locales cubren conflictos, interrupciones, respuesta perdida, integr
 ## Comportamiento conservado
 
 Tarifa estándar congelada por línea al liquidar. Presupuesto total por actividad aunque se filtren fechas. Excel: hoja `Estimado de Costos`, profesionales J:T/fila 5, códigos/actividades B/C. Liquidaciones internas con reportes, sin integración bancaria. Sin recuperación automática de contraseña ni MFA para usuarios locales.
+# Interfaz profesional ALTIVIA
+
+La plataforma usa el logo corporativo y una presentación en azul ALTIVIA. El centro gerencial muestra presupuesto, horas registradas, aprobadas y pendientes, tarjetas por proyecto y accesos directos a las acciones del administrador. Los filtros del reporte no limitan la bandeja de aprobación.
+
+En **Usuarios y tarifas**, utiliza las pestañas **Usuarios y accesos**, **Tarifas por hora** y **Asignaciones**. En **Proyectos y actividades**, los datos del proyecto y la edición del presupuesto se organizan en pestañas independientes. La guía del administrador está disponible en el centro gerencial.
+
+Para actualizar esta interfaz, conserva juntos `app.py`, `ui.py`, `assets/` y `.streamlit/config.toml`, además de los módulos de almacenamiento. Las credenciales siguen en la configuración privada de Streamlit. El rediseño no requiere migrar listas ni modificar registros existentes.
+

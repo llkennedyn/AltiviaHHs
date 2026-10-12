@@ -11,9 +11,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import load_workbook
 from db import engine, init_schema, one, all_rows, scalar, exec_sql, log, reset_context
 from sharepoint_graph import setting
+from ui import apply_theme, brand, page_header, login_intro, section_note, project_card, shortcut, NAV_ICONS
 
-st.set_page_config(page_title='ALTIVIA HH CONTROL',page_icon='📊',layout='wide',initial_sidebar_state='expanded')
-st.markdown('''<style>.block-container{padding-top:1.4rem;max-width:1450px}div[data-testid="stMetric"]{background:#fff;padding:16px;border:1px solid #e2ebef;border-radius:14px}h1,h2,h3{color:#11384b}section[data-testid="stSidebar"]{background:#11384b}section[data-testid="stSidebar"] *{color:#f5f9fc!important}section[data-testid="stSidebar"] button{color:#17364a!important}</style>''',unsafe_allow_html=True)
+st.set_page_config(page_title='ALTIVIA · HH Control',page_icon=str(__import__('pathlib').Path(__file__).parent/'assets'/'altivia-logo.png'),layout='wide',initial_sidebar_state='expanded')
+apply_theme()
 reset_context()
 try:init_schema()
 except Exception as exc:
@@ -34,10 +35,11 @@ def me():
 def require(role):
     if me()['role'] not in role:st.error('Acceso no autorizado.');st.stop()
 def options(rows,key='name'):return {f"{r.get('code',r['id'])} · {r[key]}":r['id'] for r in rows}
-def choose(title,rows,key='name',empty=False,k=None):
-    opts=options(rows,key);names=(['Todos'] if empty else [])+list(opts)
-    selected=st.selectbox(title,names,key=k) if names else None
-    return None if selected in ('Todos',None) else opts[selected]
+def choose(title,rows,key='name',empty=False,k=None,selected_id=None,empty_label='Todos'):
+    opts=options(rows,key);names=([empty_label] if empty else [])+list(opts)
+    initial=next((label for label,ident in opts.items() if ident==selected_id),names[0] if names else None)
+    selected=st.selectbox(title,names,key=k,index=names.index(initial)) if names else None
+    return opts.get(selected)
 def audit_event(c,action,target,tid=None,detail=''):log(c,me()['id'],action,target,tid,detail)
 
 def authenticate():
@@ -62,10 +64,17 @@ def authenticate():
                 st.success('Administrador creado; inicia sesión.');st.rerun()
         st.stop()
     if not me():
-        st.title('ALTIVIA HH CONTROL')
-        st.caption('Acceso privado · gestión de horas hombre')
-        with st.form('login'):
-            login=st.text_input('Usuario').strip().lower();pwd=st.text_input('Contraseña',type='password');submitted=st.form_submit_button('Ingresar',type='primary')
+        left, spacer, right = st.columns([1.15,.12,1])
+        with left:login_intro()
+        with right:
+            st.markdown('<div style="height:90px"></div>',unsafe_allow_html=True)
+            st.subheader('Bienvenido a ALTIVIA')
+            st.caption('Ingresa con el usuario que te asignó el administrador.')
+            with st.form('login'):
+                login=st.text_input('Usuario',placeholder='Tu usuario de acceso').strip().lower()
+                pwd=st.text_input('Contraseña',type='password',placeholder='Ingresa tu contraseña')
+                submitted=st.form_submit_button('Ingresar',type='primary',use_container_width=True)
+            st.caption('Acceso privado · Si necesitas ayuda, contacta al administrador de tu equipo.')
         if submitted:
             u=one('SELECT * FROM users WHERE username=:u AND active=1',{'u':login})
             if u and check_password_hash(u['pw'],pwd):
@@ -86,14 +95,18 @@ def authenticate():
         st.stop()
 
 authenticate()
-u=me();st.sidebar.title('ALTIVIA · HH')
-st.sidebar.caption(f"{u['name']} · {u['role'].capitalize()}")
+u=me()
+brand(sidebar=True)
+st.sidebar.caption('ESPACIO DE TRABAJO')
 menus=['Centro gerencial','Mis HH']
 if u['role'] in ('admin','supervisor'):menus+=['HH por profesional','Aprobaciones','Presupuestos EDT']
 if u['role']=='admin':menus+=['Proyectos y actividades','Usuarios y tarifas','Importar Excel','Liquidaciones','Auditoría']
-page=st.sidebar.radio('Navegación',menus)
+page=st.sidebar.radio('Navegación',menus,key='navigation',format_func=lambda x:f'{NAV_ICONS[x]}  {x}')
+st.sidebar.divider()
+st.sidebar.caption(f"{u['name']} · {u['role'].capitalize()}")
 if st.sidebar.button('Cerrar sesión'):
     st.session_state.clear();st.rerun()
+page_header(page,u)
 
 def projects_access(include_inactive=True):
     if u['role']=='admin':cond='1=1';args={}
@@ -123,9 +136,9 @@ def date_filters():
     return pid,since,until
 
 if page=='Centro gerencial':
-    st.title('Centro gerencial')
-    st.caption('Filtros independientes o combinados por proyecto y fechas de trabajo. El presupuesto es total; el consumo sigue el filtro.')
-    pid,start,end=date_filters()
+    with st.container(border=True):
+        st.caption('ALCANCE DEL REPORTE')
+        pid,start,end=date_filters()
     projs=[p for p in projects_access() if not pid or p['id']==pid]
     entries=[r for r in entries_query(pid,start,end) if r['state'] in ('pendiente','aprobado','liquidado')]
     budgets={r['project_id']:r['qty'] for r in all_rows('SELECT project_id,COALESCE(SUM(budget_quarters),0) qty FROM activities GROUP BY project_id')}
@@ -133,19 +146,73 @@ if page=='Centro gerencial':
     total=sum(e['quarters'] for e in entries)/4
     approved=sum(e['quarters'] for e in entries if e['state'] in ('aprobado','liquidado'))/4
     pending=sum(e['quarters'] for e in entries if e['state']=='pendiente')/4
-    k=st.columns(5)
-    for col,label,val in zip(k,['Presupuesto total','HH cargadas (filtro)','HH aprobadas (filtro)','HH por aprobar','Diferencia presupuesto/filtro'],[budget,total,approved,pending,budget-total]):col.metric(label,f'{val:,.2f} HH')
-    rows=[]
-    for p in projs:
-        e=[x for x in entries if x['project_id']==p['id']]
-        q=sum(x['quarters'] for x in e)/4;b=budgets.get(p['id'],0)/4
-        rows.append(dict(Proyecto=f"{p['code']} · {p['name']}",Estado=p['status'],Presupuesto_HH=b,HH_cargadas=q,HH_aprobadas=sum(x['quarters'] for x in e if x['state'] in ('aprobado','liquidado'))/4,HH_por_aprobar=sum(x['quarters'] for x in e if x['state']=='pendiente')/4,Diferencia_HH=b-q,Consumo_pct=round(q/b*100,1) if b else 0))
-    st.subheader('Presupuesto vs. consumo por proyecto')
-    st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
-    if rows:st.bar_chart(pd.DataFrame(rows).set_index('Proyecto')[['Presupuesto_HH','HH_cargadas']])
+    k=st.columns(4)
+    for col,label,val in zip(k,['Presupuesto total','Horas registradas','Horas aprobadas','Pendientes de aprobación'],[budget,total,approved,pending]):
+        col.metric(label,f'{val:,.2f}',help='Horas hombre (HH). El presupuesto corresponde al total de las actividades; las horas siguen los filtros seleccionados.')
+    st.caption('Valores en HH · Presupuesto total de actividades. Consumo y pendientes según los filtros seleccionados.')
+    st.markdown('')
+    main, side=st.columns([2.1,1],gap='large')
+    with main:
+        st.subheader('Estado de los proyectos')
+        st.caption('Compara el presupuesto con las horas del alcance seleccionado.')
+        rows=[]
+        if not projs:
+            st.info('Aún no hay proyectos disponibles en este alcance.')
+            if u['role']=='admin':shortcut('Crear el primer proyecto','Proyectos y actividades','first_project')
+        for p in projs:
+            e=[x for x in entries if x['project_id']==p['id']]
+            q=sum(x['quarters'] for x in e)/4;b=budgets.get(p['id'],0)/4
+            ap=sum(x['quarters'] for x in e if x['state'] in ('aprobado','liquidado'))/4
+            pe=sum(x['quarters'] for x in e if x['state']=='pendiente')/4
+            project_card(p,b,q,ap,pe)
+            rows.append(dict(Proyecto=f"{p['code']} · {p['name']}",Estado=p['status'],Presupuesto_HH=b,HH_cargadas=q,HH_aprobadas=ap,HH_por_aprobar=pe,Diferencia_HH=b-q,Consumo_pct=round(q/b*100,1) if b else 0))
+    with side:
+        st.subheader('Tu siguiente acción')
+        with st.container(border=True):
+            reviewable=[e for e in entries_query() if e['state']=='pendiente' and e['user_id']!=u['id']]
+            if u['role'] in ('admin','supervisor'):
+                st.markdown(f"**{len(reviewable)} registros por revisar**")
+                st.caption('La bandeja de aprobación reúne todos los registros pendientes de tu alcance, sin el filtro de fechas de este reporte.')
+                shortcut('Ir a aprobaciones →','Aprobaciones','quick_review')
+            else:
+                st.markdown('**Mantén tus horas al día**')
+                st.caption('Registra la actividad realizada y envíala para revisión.')
+                shortcut('Registrar mis horas →','Mis HH','quick_hours')
+        if u['role']=='admin':
+            assigned=all_rows('SELECT DISTINCT u.id,u.name,r.rate_cents FROM users u JOIN assignments a ON a.user_id=u.id LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1')
+            missing=[x for x in assigned if x['rate_cents'] is None]
+            with st.container(border=True):
+                st.markdown('**Preparación del cierre**')
+                st.caption(f"{len(missing)} profesionales asignados sin tarifa. Configura sus tarifas antes de liquidar." if missing else 'Consulta las horas aprobadas, elige el corte y revisa los importes antes de cerrar.')
+                shortcut('Configurar tarifas →' if missing else 'Ver liquidaciones →','Usuarios y tarifas' if missing else 'Liquidaciones','quick_close')
+        with st.container(border=True):
+            st.markdown('**Control del presupuesto**')
+            st.caption('Revisa la dedicación de cada actividad y detecta desviaciones a tiempo.')
+            if u['role'] in ('admin','supervisor'):shortcut('Ver presupuesto EDT →','Presupuestos EDT','quick_budget')
+            else:shortcut('Consultar mis horas →','Mis HH','quick_history')
+    with st.expander('Comparativo detallado y descarga'):
+        st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True,column_config={'Consumo_pct':st.column_config.ProgressColumn('Consumo (%)',min_value=0,max_value=max(100,max((x['Consumo_pct'] for x in rows),default=100)),format='%.1f%%'),'Presupuesto_HH':st.column_config.NumberColumn('Presupuesto (HH)',format='%.2f'),'HH_cargadas':st.column_config.NumberColumn('Registradas (HH)',format='%.2f'),'Diferencia_HH':st.column_config.NumberColumn('Saldo (HH)',format='%.2f')})
+        if rows:
+            st.bar_chart(pd.DataFrame(rows).set_index('Proyecto')[['Presupuesto_HH','HH_cargadas']],color=['#222c58','#137f81'],stack=False)
+    if u['role']=='admin':
+        with st.expander('Guía del administrador · configura tu equipo en orden'):
+            c1,c2,c3=st.columns(3)
+            with c1:
+                st.markdown('**01 · Organiza el trabajo**')
+                st.caption('Crea el proyecto y su responsable. Añade actividades o importa tu matriz Excel.')
+                shortcut('Proyectos y actividades','Proyectos y actividades','guide_projects')
+                shortcut('Importar matriz Excel','Importar Excel','guide_import')
+            with c2:
+                st.markdown('**02 · Prepara al equipo**')
+                st.caption('Crea usuarios, revisa sus tarifas y asigna las actividades que pueden registrar.')
+                shortcut('Usuarios, tarifas y asignaciones','Usuarios y tarifas','guide_team')
+            with c3:
+                st.markdown('**03 · Revisa y cierra**')
+                st.caption('Aprueba el trabajo, controla el presupuesto y liquida las horas aprobadas por fecha de corte.')
+                shortcut('Bandeja de aprobaciones','Aprobaciones','guide_review')
 
 elif page=='Mis HH':
-    st.title('Mis horas hombre')
+    section_note('Registro diario','Selecciona proyecto y actividad, indica las horas y describe el trabajo realizado. Máximo 12 HH por día.')
     projs=projects_access(False)
     if not projs:st.info('No tienes proyectos activos asignados.')
     else:
@@ -196,7 +263,6 @@ elif page=='Mis HH':
                 st.rerun()
 
 elif page=='HH por profesional':
-    st.title('HH por proyecto y profesional')
     pid,start,end=date_filters();entries=entries_query(pid,start,end)
     rows={}
     for e in entries:
@@ -211,12 +277,15 @@ elif page=='HH por profesional':
         st.dataframe(pd.DataFrame([dict(Profesional=r['worker'],Proyecto=r['project'],EDT=r['activity_code'],Actividad=r['activity'],Fecha=r['work_date'],HH=r['quarters']/4,Estado=r['state']) for r in entries]),use_container_width=True,hide_index=True)
 
 elif page=='Aprobaciones':
-    st.title('Aprobación de HH')
     pending=[r for r in entries_query() if r['state']=='pendiente' and r['user_id']!=u['id']]
+    c1,c2=st.columns(2)
+    c1.metric('Registros por revisar',len(pending));c2.metric('Horas por revisar',f"{sum(r['quarters'] for r in pending)/4:,.2f} HH")
+    section_note('Revisa antes de decidir','Aprobar valida las horas. Observar permite que el profesional corrija. Rechazar descarta el registro con un motivo.')
+    if not pending:st.success('Todo al día. No hay registros pendientes de revisión de otros profesionales.')
     st.dataframe(pd.DataFrame([dict(ID=r['id'],Trabajador=r['worker'],Proyecto=r['project'],Actividad=r['activity'],Fecha=r['work_date'],HH=r['quarters']/4,Descripción=r['description']) for r in pending]),hide_index=True,use_container_width=True)
     if pending:
         with st.form('approve'):
-            eid=st.selectbox('Registro', [r['id'] for r in pending])
+            eid=st.selectbox('Registro', [r['id'] for r in pending],format_func=lambda i:next(f"#{r['id']} · {r['worker']} · {r['project']} · {r['quarters']/4:.2f} HH" for r in pending if r['id']==i))
             decision=st.radio('Decisión',['Aprobar','Observar','Rechazar'],horizontal=True)
             note=st.text_area('Observación / motivo')
             if st.form_submit_button('Registrar decisión'):
@@ -232,17 +301,17 @@ elif page=='Aprobaciones':
                     st.success('Revisión registrada.');st.rerun()
 
 elif page=='Presupuestos EDT':
-    st.title('Presupuestos por actividad')
+    section_note('Lectura del presupuesto','El consumo incluye horas pendientes, aprobadas y liquidadas. Un saldo negativo señala un exceso de presupuesto.')
     pid=choose('Proyecto',projects_access())
     rows=all_rows('''SELECT a.code,a.name,a.budget_quarters,COALESCE(SUM(CASE WHEN e.state IN ('pendiente','aprobado','liquidado') THEN e.quarters ELSE 0 END),0) consumed
       FROM activities a LEFT JOIN entries e ON e.activity_id=a.id WHERE a.project_id=:pid GROUP BY a.id ORDER BY a.code''',{'pid':pid}) if pid else []
     st.dataframe(pd.DataFrame([dict(EDT=r['code'],Actividad=r['name'],Presupuesto_HH=r['budget_quarters']/4,HH_cargadas=r['consumed']/4,Saldo_HH=(r['budget_quarters']-r['consumed'])/4) for r in rows]),hide_index=True,use_container_width=True)
 elif page=='Proyectos y actividades':
-    st.title('Proyectos y actividades')
+    section_note('Organiza el proyecto','Primero crea el proyecto y asigna un supervisor. Después agrega sus actividades y revisa las horas presupuestadas.')
     with st.expander('Nuevo proyecto'):
         with st.form('newproj'):
             code=st.text_input('Código (único)');name=st.text_input('Nombre');supervisors=all_rows("SELECT id,name FROM users WHERE role IN ('supervisor','admin') AND active=1 ORDER BY name")
-            sup=choose('Supervisor responsable',supervisors,empty=True);save=st.form_submit_button('Crear proyecto')
+            sup=choose('Supervisor responsable',supervisors,empty=True,empty_label='Sin asignar');save=st.form_submit_button('Crear proyecto')
         if save:
             try:
                 with engine().begin() as c:
@@ -253,99 +322,109 @@ elif page=='Proyectos y actividades':
     projs=projects_access();pid=choose('Selecciona proyecto',projs)
     if pid:
         p=next(x for x in projs if x['id']==pid)
-        with st.form('change-project'):
-            code=st.text_input('Código',value=p['code']);name=st.text_input('Nombre',value=p['name']);status=st.selectbox('Estado',['activo','desactivado','terminado'],index=['activo','desactivado','terminado'].index(p['status']))
-            sup=choose('Supervisor',all_rows("SELECT id,name FROM users WHERE role IN ('supervisor','admin') AND active=1"),empty=True)
-            if st.form_submit_button('Guardar proyecto'):
-                with engine().begin() as c:
-                    c.execute(text('UPDATE projects SET code=:cd,name=:n,status=:s,supervisor_id=:sup WHERE id=:pid'),dict(cd=code.strip(),n=name.strip(),s=status,sup=sup,pid=pid))
-                    audit_event(c,'editar_proyecto','project',pid,'Estado '+status)
-                st.rerun()
-        st.info('Los proyectos desactivados o terminados bloquean la carga y corrección de HH, pero conservan el historial.')
-        acts=all_rows('SELECT id,code,name,budget_quarters,active FROM activities WHERE project_id=:pid ORDER BY code',{'pid':pid})
-        st.subheader('Actividades · edición en tabla')
-        if acts:
-            df=pd.DataFrame([dict(ID=r['id'],EDT=r['code'],Actividad=r['name'],Presupuesto_HH=r['budget_quarters']/4,Activa=bool(r['active'])) for r in acts])
-            edited=st.data_editor(df,hide_index=True,use_container_width=True,disabled=['ID'],num_rows='fixed',key='activities_edit')
-            if st.button('Guardar modificaciones de actividades',type='primary'):
-                try:
+        settings_tab,activities_tab=st.tabs(['Datos del proyecto','Actividades y presupuesto'])
+        with settings_tab:
+            with st.form('change-project'):
+                code=st.text_input('Código',value=p['code']);name=st.text_input('Nombre',value=p['name']);status=st.selectbox('Estado',['activo','desactivado','terminado'],index=['activo','desactivado','terminado'].index(p['status']))
+                sup=choose('Supervisor',all_rows("SELECT id,name FROM users WHERE role IN ('supervisor','admin') AND active=1"),empty=True,selected_id=p['supervisor_id'],empty_label='Sin asignar',k=f'supervisor_{pid}')
+                if st.form_submit_button('Guardar proyecto'):
                     with engine().begin() as c:
-                        for _,r in edited.iterrows():
-                            b=Decimal(str(r['Presupuesto_HH']))
-                            if b<0 or b*4!=(b*4).to_integral_value():raise ValueError('El presupuesto debe ser múltiplo de 0.25 HH.')
-                            c.execute(text('UPDATE activities SET code=:code,name=:name,budget_quarters=:q,active=:active WHERE id=:id AND project_id=:pid'),dict(code=str(r['EDT']).strip(),name=str(r['Actividad']).strip(),q=int(b*4),active=int(bool(r['Activa'])),id=int(r['ID']),pid=pid))
-                        audit_event(c,'edicion_masiva_actividades','project',pid)
-                    st.success('Actividades actualizadas.');st.rerun()
-                except Exception as exc:st.error(str(exc))
-        with st.expander('Agregar actividad'):
-            with st.form('newact'):
-                cd=st.text_input('EDT/WBS');nm=st.text_input('Actividad');budget=st.number_input('HH presupuesto',min_value=0.,step=.25)
-                if st.form_submit_button('Agregar'):
+                        c.execute(text('UPDATE projects SET code=:cd,name=:n,status=:s,supervisor_id=:sup WHERE id=:pid'),dict(cd=code.strip(),n=name.strip(),s=status,sup=sup,pid=pid))
+                        audit_event(c,'editar_proyecto','project',pid,'Estado '+status)
+                    st.rerun()
+            st.info('Los proyectos desactivados o terminados bloquean la carga y corrección de HH, pero conservan el historial.')
+        with activities_tab:
+            acts=all_rows('SELECT id,code,name,budget_quarters,active FROM activities WHERE project_id=:pid ORDER BY code',{'pid':pid})
+            st.subheader('Actividades · edición en tabla')
+            if acts:
+                df=pd.DataFrame([dict(ID=r['id'],EDT=r['code'],Actividad=r['name'],Presupuesto_HH=r['budget_quarters']/4,Activa=bool(r['active'])) for r in acts])
+                edited=st.data_editor(df,hide_index=True,use_container_width=True,disabled=['ID'],num_rows='fixed',key='activities_edit')
+                if st.button('Guardar modificaciones de actividades',type='primary'):
                     try:
                         with engine().begin() as c:
-                            aid=c.execute(text('INSERT INTO activities(project_id,code,name,budget_quarters) VALUES(:pid,:code,:name,:b) RETURNING id'),dict(pid=pid,code=cd.strip(),name=nm.strip(),b=int(Decimal(str(budget))*4))).scalar_one()
-                            audit_event(c,'crear_actividad','activity',aid)
-                        st.rerun()
+                            for _,r in edited.iterrows():
+                                b=Decimal(str(r['Presupuesto_HH']))
+                                if b<0 or b*4!=(b*4).to_integral_value():raise ValueError('El presupuesto debe ser múltiplo de 0.25 HH.')
+                                c.execute(text('UPDATE activities SET code=:code,name=:name,budget_quarters=:q,active=:active WHERE id=:id AND project_id=:pid'),dict(code=str(r['EDT']).strip(),name=str(r['Actividad']).strip(),q=int(b*4),active=int(bool(r['Activa'])),id=int(r['ID']),pid=pid))
+                            audit_event(c,'edicion_masiva_actividades','project',pid)
+                        st.success('Actividades actualizadas.');st.rerun()
                     except Exception as exc:st.error(str(exc))
+            with st.expander('Agregar actividad'):
+                with st.form('newact'):
+                    cd=st.text_input('EDT/WBS');nm=st.text_input('Actividad');budget=st.number_input('HH presupuesto',min_value=0.,step=.25)
+                    if st.form_submit_button('Agregar'):
+                        try:
+                            with engine().begin() as c:
+                                aid=c.execute(text('INSERT INTO activities(project_id,code,name,budget_quarters) VALUES(:pid,:code,:name,:b) RETURNING id'),dict(pid=pid,code=cd.strip(),name=nm.strip(),b=int(Decimal(str(budget))*4))).scalar_one()
+                                audit_event(c,'crear_actividad','activity',aid)
+                            st.rerun()
+                        except Exception as exc:st.error(str(exc))
 
 elif page=='Usuarios y tarifas':
-    st.title('Usuarios y tarifas estándar')
+    section_note('Configura el equipo','1. Crea usuarios y define sus roles. 2. Guarda sus tarifas. 3. Autoriza proyectos y actividades.')
     st.caption('Las tarifas no tienen fecha de vigencia. Los cierres anteriores conservan la tarifa congelada.')
-    users=all_rows('SELECT id,username,name,role,active,must_change_pw FROM users ORDER BY name')
-    df=pd.DataFrame([dict(ID=x['id'],Usuario=x['username'],Nombre=x['name'],Rol=x['role'],Activo=bool(x['active'])) for x in users])
-    edited=st.data_editor(df,hide_index=True,use_container_width=True,disabled=['ID'],column_config={'Rol':st.column_config.SelectboxColumn(options=['admin','supervisor','trabajador'])},key='useredit')
-    if st.button('Guardar cambios de usuarios',type='primary'):
-        try:
-            with engine().begin() as c:
-                active_admins=0
-                for _,row in edited.iterrows():
-                    if row['Rol']=='admin' and row['Activo']:active_admins+=1
-                if active_admins<1:raise ValueError('Debe existir al menos un administrador activo.')
-                for _,row in edited.iterrows():
-                    c.execute(text('UPDATE users SET username=:login,name=:name,role=:role,active=:active WHERE id=:id'),dict(login=str(row['Usuario']).lower().strip(),name=str(row['Nombre']).strip(),role=row['Rol'],active=int(row['Activo']),id=int(row['ID'])))
-                audit_event(c,'edicion_usuarios','users')
-            st.success('Usuarios actualizados.');st.rerun()
-        except Exception as exc:st.error(str(exc))
-    with st.expander('Crear usuario manualmente'):
-        with st.form('newusr'):
-            name=st.text_input('Nombre completo');login=st.text_input('Usuario (opcional)');role=st.selectbox('Rol',['trabajador','supervisor','admin']);pwd=st.text_input('Contraseña temporal (mín. 12 caracteres)',type='password')
-            if st.form_submit_button('Crear'):
-                if len(pwd)<12:st.error('La contraseña temporal debe tener al menos 12 caracteres.')
-                else:
-                    try:
-                        with engine().begin() as c:
-                            uid=c.execute(text('INSERT INTO users(username,name,pw,role,must_change_pw) VALUES(:login,:name,:pw,:role,1) RETURNING id'),dict(login=(login.strip().lower() or login_from_name(name)),name=name.strip(),pw=generate_password_hash(pwd),role=role)).scalar_one()
-                            audit_event(c,'crear_usuario','user',uid)
-                        st.rerun()
-                    except Exception as exc:st.error(str(exc))
-    st.subheader('Tarifas estándar por HH')
-    rates=all_rows('SELECT u.id,u.name,r.rate_cents FROM users u LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1 ORDER BY u.name')
-    rdf=pd.DataFrame([dict(ID=r['id'],Trabajador=r['name'],Tarifa_Soles=round((r['rate_cents'] or 0)/100,2)) for r in rates])
-    edited_rates=st.data_editor(rdf,hide_index=True,use_container_width=True,disabled=['ID','Trabajador'],key='rates_edit')
-    if st.button('Guardar tarifas',type='primary'):
-        try:
-            with engine().begin() as c:
-                for _,r in edited_rates.iterrows():
-                    cents=int((Decimal(str(r['Tarifa_Soles']))*100).quantize(Decimal('1')))
-                    if cents<0:raise ValueError('No se aceptan tarifas negativas.')
-                    c.execute(text('INSERT INTO rates(user_id,rate_cents) VALUES(:u,:rate) ON CONFLICT (user_id) DO UPDATE SET rate_cents=EXCLUDED.rate_cents'),dict(u=int(r['ID']),rate=cents))
-                audit_event(c,'actualizar_tarifas','rates')
-            st.success('Tarifas actualizadas.');st.rerun()
-        except Exception as e:st.error(str(e))
-    with st.expander('Asignar trabajador a proyecto o actividad'):
-        people=all_rows('SELECT id,name FROM users WHERE active=1 ORDER BY name');person=choose('Trabajador',people)
-        pid=choose('Proyecto',projects_access());aa=all_rows('SELECT id,code,name FROM activities WHERE project_id=:pid ORDER BY code',{'pid':pid}) if pid else []
-        selected=st.multiselect('Actividades autorizadas',list(options(aa)),key='assign_act')
-        if st.button('Agregar asignaciones'):
-            with engine().begin() as c:
-                c.execute(text('INSERT INTO assignments(user_id,project_id) VALUES(:u,:p) ON CONFLICT DO NOTHING'),dict(u=person,p=pid))
-                for label in selected:c.execute(text('INSERT INTO activity_assignments(user_id,activity_id) VALUES(:u,:a) ON CONFLICT DO NOTHING'),dict(u=person,a=options(aa)[label]))
-                audit_event(c,'asignar_actividades','user',person)
-            st.success('Asignaciones registradas.')
+    accounts_tab,rates_tab,assignments_tab=st.tabs(['Usuarios y accesos','Tarifas por hora','Asignaciones'])
+    with accounts_tab:
+        users=all_rows('SELECT id,username,name,role,active,must_change_pw FROM users ORDER BY name')
+        df=pd.DataFrame([dict(ID=x['id'],Usuario=x['username'],Nombre=x['name'],Rol=x['role'],Activo=bool(x['active'])) for x in users])
+        edited=st.data_editor(df,hide_index=True,use_container_width=True,disabled=['ID'],column_config={'Rol':st.column_config.SelectboxColumn(options=['admin','supervisor','trabajador'])},key='useredit')
+        if st.button('Guardar cambios de usuarios',type='primary'):
+            try:
+                with engine().begin() as c:
+                    active_admins=0
+                    for _,row in edited.iterrows():
+                        if row['Rol']=='admin' and row['Activo']:active_admins+=1
+                    if active_admins<1:raise ValueError('Debe existir al menos un administrador activo.')
+                    for _,row in edited.iterrows():
+                        c.execute(text('UPDATE users SET username=:login,name=:name,role=:role,active=:active WHERE id=:id'),dict(login=str(row['Usuario']).lower().strip(),name=str(row['Nombre']).strip(),role=row['Rol'],active=int(row['Activo']),id=int(row['ID'])))
+                    audit_event(c,'edicion_usuarios','users')
+                st.success('Usuarios actualizados.');st.rerun()
+            except Exception as exc:st.error(str(exc))
+        with st.expander('Crear usuario manualmente'):
+            with st.form('newusr'):
+                name=st.text_input('Nombre completo');login=st.text_input('Usuario (opcional)');role=st.selectbox('Rol',['trabajador','supervisor','admin']);pwd=st.text_input('Contraseña temporal (mín. 12 caracteres)',type='password')
+                if st.form_submit_button('Crear'):
+                    if len(pwd)<12:st.error('La contraseña temporal debe tener al menos 12 caracteres.')
+                    else:
+                        try:
+                            with engine().begin() as c:
+                                uid=c.execute(text('INSERT INTO users(username,name,pw,role,must_change_pw) VALUES(:login,:name,:pw,:role,1) RETURNING id'),dict(login=(login.strip().lower() or login_from_name(name)),name=name.strip(),pw=generate_password_hash(pwd),role=role)).scalar_one()
+                                audit_event(c,'crear_usuario','user',uid)
+                            st.rerun()
+                        except Exception as exc:st.error(str(exc))
+    with rates_tab:
+        st.subheader('Tarifas estándar por HH')
+        rates=all_rows('SELECT u.id,u.name,r.rate_cents FROM users u LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1 ORDER BY u.name')
+        rdf=pd.DataFrame([dict(ID=r['id'],Trabajador=r['name'],Tarifa_Soles=round((r['rate_cents'] or 0)/100,2)) for r in rates])
+        edited_rates=st.data_editor(rdf,hide_index=True,use_container_width=True,disabled=['ID','Trabajador'],key='rates_edit')
+        if st.button('Guardar tarifas',type='primary'):
+            try:
+                with engine().begin() as c:
+                    for _,r in edited_rates.iterrows():
+                        cents=int((Decimal(str(r['Tarifa_Soles']))*100).quantize(Decimal('1')))
+                        if cents<0:raise ValueError('No se aceptan tarifas negativas.')
+                        c.execute(text('INSERT INTO rates(user_id,rate_cents) VALUES(:u,:rate) ON CONFLICT (user_id) DO UPDATE SET rate_cents=EXCLUDED.rate_cents'),dict(u=int(r['ID']),rate=cents))
+                    audit_event(c,'actualizar_tarifas','rates')
+                st.success('Tarifas actualizadas.');st.rerun()
+            except Exception as e:st.error(str(e))
+    with assignments_tab:
+        with st.container(border=True):
+            st.subheader('Autorizar actividades')
+            st.caption('El profesional podrá registrar horas únicamente en las actividades que selecciones. Las nuevas autorizaciones se agregan a las existentes.')
+            people=all_rows('SELECT id,name FROM users WHERE active=1 ORDER BY name');person=choose('Trabajador',people)
+            pid=choose('Proyecto',projects_access());aa=all_rows('SELECT id,code,name FROM activities WHERE project_id=:pid ORDER BY code',{'pid':pid}) if pid else []
+            selected=st.multiselect('Actividades autorizadas',list(options(aa)),key='assign_act')
+            if st.button('Agregar asignaciones'):
+                with engine().begin() as c:
+                    c.execute(text('INSERT INTO assignments(user_id,project_id) VALUES(:u,:p) ON CONFLICT DO NOTHING'),dict(u=person,p=pid))
+                    for label in selected:c.execute(text('INSERT INTO activity_assignments(user_id,activity_id) VALUES(:u,:a) ON CONFLICT DO NOTHING'),dict(u=person,a=options(aa)[label]))
+                    audit_event(c,'asignar_actividades','user',person)
+                st.success('Asignaciones registradas.')
 
 elif page=='Importar Excel':
-    st.title('Importación EDT/WBS desde Excel')
-    st.caption('Hoja Estimado de Costos: EDT en B; actividad C; profesionales fila 5, columnas J:T; HH positivas por cruce.')
+    section_note('Antes de importar','Selecciona el proyecto destino. La vista previa te permitirá revisar actividades, profesionales y horas antes de guardar.')
+    with st.expander('Formato requerido del archivo Excel'):
+        st.write('Hoja **Estimado de Costos**: EDT en columna B; actividad en C; profesionales en fila 5, columnas J:T; horas positivas en cada cruce. Se admiten archivos .xlsx.')
     pid=choose('Proyecto destino',projects_access())
     file=st.file_uploader('Seleccionar libro .xlsx',type=['xlsx'])
     if file and pid:
@@ -405,8 +484,7 @@ elif page=='Importar Excel':
         except Exception as e:st.error(str(e))
 
 elif page=='Liquidaciones':
-    st.title('Liquidaciones con fecha de corte')
-    st.caption('Se incluyen HH aprobadas por fecha de trabajo y aprobadas hasta el cierre; no se vuelven a liquidar.')
+    section_note('Cierre del periodo','El corte considera la fecha de trabajo y de aprobación. Cada registro se liquida una sola vez; la tarifa queda congelada en el cierre.')
     cutoff=st.date_input('Fecha de corte',date.today());workers=all_rows("SELECT id,name FROM users WHERE role IN ('trabajador','supervisor','admin') AND active=1 ORDER BY name")
     candidates=all_rows('''SELECT us.id,us.name,COUNT(e.id) records,COALESCE(SUM(e.quarters),0) quarters,r.rate_cents
         FROM users us JOIN entries e ON e.user_id=us.id LEFT JOIN rates r ON r.user_id=us.id
@@ -456,6 +534,6 @@ elif page=='Liquidaciones':
         st.download_button('Exportar resumen a PDF',data=pdf.getvalue(),file_name='altivia_liquidaciones.pdf',mime='application/pdf')
 
 elif page=='Auditoría':
-    st.title('Auditoría')
+    st.caption('Últimos 500 movimientos · utiliza la búsqueda de la tabla para localizar una acción o registro.')
     rows=all_rows('SELECT * FROM audit ORDER BY id DESC LIMIT 500')
     st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)

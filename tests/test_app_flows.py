@@ -71,3 +71,21 @@ def test_worker_submission_and_supervisor_approval(setup,monkeypatch):
     table=reviewer.dataframe[0].value
     assert table.iloc[0]['Presupuesto_HH']==100
     assert table.iloc[0]['HH_cargadas']==1.25
+
+
+def test_dashboard_shortcut_and_project_responsible_preserved(setup,monkeypatch):
+    _, s, e = setup
+    monkeypatch.setattr(db_sharepoint,'_engine',e)
+    monkeypatch.setenv('DATA_BACKEND','sharepoint')
+    at=AppTest.from_file(Path('app.py').resolve(),default_timeout=20)
+    at.session_state['uid']=1
+    at.run()
+    next(b for b in at.button if b.label=='Ir a aprobaciones →').click().run()
+    assert not at.exception and at.sidebar.radio[0].value=='Aprobaciones'
+    at.sidebar.radio[0].set_value('Proyectos y actividades').run()
+    # Saving a project's name must retain the responsible supervisor selected by default.
+    next(t for t in at.text_input if t.label=='Nombre' and t.value=='Synthetic').set_value('Renamed project')
+    next(b for b in at.button if b.label=='Guardar proyecto').click().run()
+    assert not at.exception and not at.error
+    project=s.snapshot()['data']['projects']['1']
+    assert project['name']=='Renamed project' and project['supervisor_id']==2
