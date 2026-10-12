@@ -51,11 +51,11 @@ def authenticate():
         st.warning('Este formulario crea el primer administrador y requiere la clave privada de instalación.')
         with st.form('setup'):
             supplied_token=st.text_input('Clave de instalación',type='password')
-            name=st.text_input('Nombre completo');login=st.text_input('Usuario administrador').lower().strip();pwd=st.text_input('Contraseña (mínimo 12 caracteres)',type='password');confirm=st.text_input('Repetir contraseña',type='password')
+            name=st.text_input('Nombre completo');login=st.text_input('Usuario administrador').lower().strip();pwd=st.text_input('Contraseña (mínimo 6 caracteres)',type='password');confirm=st.text_input('Repetir contraseña',type='password')
             submit=st.form_submit_button('Crear administrador')
         if submit:
             if not hmac.compare_digest(supplied_token,setup_token):st.error('Clave de instalación incorrecta.')
-            elif not name.strip() or not re.fullmatch('[a-z0-9_.-]{3,40}',login) or len(pwd)<12 or pwd!=confirm:st.error('Verifica el nombre, usuario y contraseña (12 caracteres).')
+            elif not name.strip() or not re.fullmatch('[a-z0-9_.-]{3,40}',login) or len(pwd)<6 or pwd!=confirm:st.error('Verifica el nombre, usuario y contraseña (mínimo 6 caracteres).')
             else:
                 with engine().begin() as c:
                     if c.execute(text('SELECT COUNT(*) FROM users')).scalar():
@@ -84,9 +84,9 @@ def authenticate():
     if me()['must_change_pw']:
         st.title('Cambiar contraseña temporal')
         with st.form('change-pwd'):
-            pwd=st.text_input('Nueva contraseña (mínimo 12 caracteres)',type='password');again=st.text_input('Repetir nueva contraseña',type='password');ok=st.form_submit_button('Actualizar contraseña')
+            pwd=st.text_input('Nueva contraseña (mínimo 6 caracteres)',type='password');again=st.text_input('Repetir nueva contraseña',type='password');ok=st.form_submit_button('Actualizar contraseña')
         if ok:
-            if len(pwd)<12 or pwd!=again:st.error('Usa una contraseña de al menos 12 caracteres, idéntica en los dos campos.')
+            if len(pwd)<6 or pwd!=again:st.error('Usa una contraseña de al menos 6 caracteres, idéntica en los dos campos.')
             else:
                 with engine().begin() as c:
                     c.execute(text('UPDATE users SET pw=:p,must_change_pw=0 WHERE id=:i'),dict(p=generate_password_hash(pwd),i=me()['id']))
@@ -382,9 +382,9 @@ elif page=='Usuarios y tarifas':
             except Exception as exc:st.error(str(exc))
         with st.expander('Crear usuario manualmente'):
             with st.form('newusr'):
-                name=st.text_input('Nombre completo');login=st.text_input('Usuario (opcional)');role=st.selectbox('Rol',['trabajador','supervisor','admin']);pwd=st.text_input('Contraseña temporal (mín. 12 caracteres)',type='password')
+                name=st.text_input('Nombre completo');login=st.text_input('Usuario (opcional)');role=st.selectbox('Rol',['trabajador','supervisor','admin']);pwd=st.text_input('Contraseña temporal (mín. 6 caracteres)',type='password')
                 if st.form_submit_button('Crear'):
-                    if len(pwd)<12:st.error('La contraseña temporal debe tener al menos 12 caracteres.')
+                    if len(pwd)<6:st.error('La contraseña temporal debe tener al menos 6 caracteres.')
                     else:
                         try:
                             with engine().begin() as c:
