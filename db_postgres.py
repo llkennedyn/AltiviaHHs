@@ -45,8 +45,8 @@ def log(c,actor,action,target,tid=None,detail=''):
     c.execute(text('INSERT INTO audit(actor_id,action,target,target_id,detail,at) VALUES(:actor,:action,:target,:tid,:detail,:at)'),dict(actor=actor,action=action,target=target,tid=tid,detail=str(detail)[:500],at=datetime.utcnow().isoformat()))
 
 SCHEMA='''
-CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY,username TEXT UNIQUE NOT NULL,name TEXT NOT NULL,pw TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','supervisor','trabajador')),active INTEGER NOT NULL DEFAULT 1,must_change_pw INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS projects (id BIGSERIAL PRIMARY KEY,code TEXT UNIQUE NOT NULL,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'activo' CHECK(status IN ('activo','desactivado','terminado')),supervisor_id BIGINT REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS users (id BIGSERIAL PRIMARY KEY,username TEXT UNIQUE NOT NULL,name TEXT NOT NULL,pw TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','supervisor','trabajador')),active INTEGER NOT NULL DEFAULT 1,must_change_pw INTEGER NOT NULL DEFAULT 0,deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)));
+CREATE TABLE IF NOT EXISTS projects (id BIGSERIAL PRIMARY KEY,code TEXT UNIQUE NOT NULL,name TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'activo' CHECK(status IN ('activo','desactivado','terminado')),supervisor_id BIGINT REFERENCES users(id),deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)));
 CREATE TABLE IF NOT EXISTS activities (id BIGSERIAL PRIMARY KEY,project_id BIGINT NOT NULL REFERENCES projects(id),code TEXT NOT NULL,name TEXT NOT NULL,budget_quarters BIGINT NOT NULL DEFAULT 0 CHECK(budget_quarters>=0),active INTEGER NOT NULL DEFAULT 1,UNIQUE(project_id,code));
 CREATE TABLE IF NOT EXISTS assignments (user_id BIGINT REFERENCES users(id),project_id BIGINT REFERENCES projects(id),PRIMARY KEY(user_id,project_id));
 CREATE TABLE IF NOT EXISTS activity_assignments (user_id BIGINT REFERENCES users(id),activity_id BIGINT REFERENCES activities(id),planned_quarters BIGINT NOT NULL DEFAULT 0,PRIMARY KEY(user_id,activity_id));
@@ -66,3 +66,5 @@ def init_schema():
     with engine().begin() as c:
         for statement in SCHEMA.split(';'):
             if statement.strip():c.execute(text(statement))
+        for table in ('users','projects'):
+            c.execute(text(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1))'))

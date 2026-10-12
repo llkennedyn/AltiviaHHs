@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sharepoint_graph import Graph, resolve_site
 from sharepoint_store import Store
 from db_sharepoint import Engine
-from admin_ops import create_collaborator, reset_password, replace_assignments, set_project_status
+from admin_ops import create_collaborator, reset_password, replace_assignments, set_project_status, delete_user, delete_project, restore_user, restore_project
 
 
 def main():
@@ -42,6 +42,21 @@ def main():
         assert check_password_hash(data['users'][str(worker)]['pw'],'synthetic6')
         assigned={r['activity_id'] for r in data['activity_assignments'].values() if r['user_id']==worker}
         assert assigned=={b}
+        with engine.begin() as c:
+            delete_user(c,actor,worker)
+            delete_project(c,actor,project)
+        removed=Store(graph,site,prefix).snapshot()['data']
+        assert removed['users'][str(worker)]['deleted']==1 and removed['users'][str(worker)]['active']==0
+        assert removed['projects'][str(project)]['deleted']==1
+        for table in ('entries','activities','assignments','activity_assignments','rates','liquidations','liquidation_lines'):
+            assert removed[table]==data[table]
+        with engine.begin() as c:
+            restore_user(c,actor,worker)
+            restore_project(c,actor,project)
+        recovered=Store(graph,site,prefix).snapshot()['data']
+        assert recovered['users'][str(worker)]['deleted']==0 and recovered['users'][str(worker)]['active']==0
+        assert recovered['projects'][str(project)]['deleted']==0 and recovered['projects'][str(project)]['status']=='desactivado'
+        print('PASS: recoverable user/project deletion and restoration verified by independent Graph reads.')
         print(f'PASS: run {nonce}; HH_TEST_ only; create/reset/assignment edit/project finish/cold read/history and budgets preserved.')
     finally:
         if ids:

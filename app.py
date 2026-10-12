@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 from db import engine, init_schema, one, all_rows, scalar, exec_sql, log, reset_context
 from sharepoint_graph import setting
 from access import pages_for_role
-from admin_ops import create_collaborator, name_parts, reset_password, replace_assignments, set_project_status
+from admin_ops import create_collaborator, name_parts, reset_password, replace_assignments, set_project_status, delete_user, delete_project, restore_user, restore_project
 from ui import apply_theme, brand, page_header, login_intro, section_note, project_card, shortcut, NAV_ICONS, sidebar_identity, empty_state
 
 st.set_page_config(page_title='ALTIVIA · HH Control',page_icon=str(__import__('pathlib').Path(__file__).parent/'assets'/'altivia-logo.png'),layout='wide',initial_sidebar_state='expanded')
@@ -30,7 +30,7 @@ def hours_to_quarters(v):
 def money(v):return f'S/ {v/100:,.2f}'
 def me():
     uid=st.session_state.get('uid')
-    return one('SELECT * FROM users WHERE id=:i AND active=1',{'i':uid}) if uid else None
+    return one('SELECT * FROM users WHERE id=:i AND active=1 AND deleted=0',{'i':uid}) if uid else None
 
 def require(role):
     if me()['role'] not in role:st.error('Acceso no autorizado.');st.stop()
@@ -85,7 +85,7 @@ def authenticate():
                 submitted=st.form_submit_button('Ingresar',type='primary',use_container_width=True)
             st.caption('Acceso privado · Si necesitas ayuda, contacta al administrador de tu equipo.')
         if submitted:
-            u=one('SELECT * FROM users WHERE username=:u AND active=1',{'u':login})
+            u=one('SELECT * FROM users WHERE username=:u AND active=1 AND deleted=0',{'u':login})
             if u and check_password_hash(u['pw'],pwd):
                 st.session_state['uid']=u['id'];st.session_state['auth_tag']=hashlib.sha256(u['pw'].encode()).hexdigest();st.rerun()
             else:st.error('Usuario o contraseña incorrectos.')
@@ -125,6 +125,7 @@ def projects_access(include_inactive=True):
     if u['role']=='admin':cond='1=1';args={}
     elif u['role']=='supervisor':cond='supervisor_id=:uid';args={'uid':u['id']}
     else:cond='id IN (SELECT project_id FROM assignments WHERE user_id=:uid)';args={'uid':u['id']}
+    cond='('+cond+') AND deleted=0'
     if not include_inactive:cond+=" AND status='activo'"
     return all_rows('SELECT * FROM projects WHERE '+cond+' ORDER BY code',args)
 
@@ -177,7 +178,7 @@ def render_personal_history():
             if st.form_submit_button('Reenviar'):
                 with engine().begin() as c:
                     result=c.execute(text('''UPDATE entries SET quarters=:q,description=:d,state='pendiente',note='',approval_by=NULL,approval_at=NULL,updated_at=NOW()
-                        WHERE id=:id AND user_id=:uid AND state='observado' AND EXISTS (SELECT 1 FROM activities a JOIN projects p ON p.id=a.project_id WHERE a.id=entries.activity_id AND p.status='activo' AND a.active=1)'''),dict(q=hours_to_quarters(h),d=desc,id=eid,uid=u['id']))
+                        WHERE id=:id AND user_id=:uid AND state='observado' AND EXISTS (SELECT 1 FROM activities a JOIN projects p ON p.id=a.project_id WHERE a.id=entries.activity_id AND p.status='activo' AND p.deleted=0 AND a.active=1)'''),dict(q=hours_to_quarters(h),d=desc,id=eid,uid=u['id']))
                     if result.rowcount!=1:raise ValueError('Registro no disponible para corrección.')
                     audit_event(c,'corregir_hh','entry',eid)
                 st.rerun()
@@ -189,7 +190,7 @@ if page=='Centro gerencial':
         st.caption('ALCANCE DEL REPORTE')
         pid,start,end=date_filters()
     projs=[p for p in projects_access() if not pid or p['id']==pid]
-    entries=[r for r in entries_query(pid,start,end) if r['state'] in ('pendiente','aprobado','liquidado')]
+    entries=[r for r in entries_query(pid,start,end) if r['state'] in ('pendiente','aprobado','liquidado') and r['project_id'] in {p['id'] for p in projs}]
     budgets={r['project_id']:r['qty'] for r in all_rows('SELECT project_id,COALESCE(SUM(budget_quarters),0) qty FROM activities GROUP BY project_id')}
     budget=sum(budgets.get(p['id'],0) for p in projs)/4
     total=sum(e['quarters'] for e in entries)/4
@@ -228,7 +229,7 @@ if page=='Centro gerencial':
                 st.caption('Registra la actividad realizada y envíala para revisión.')
                 shortcut('Registrar mis horas →','Mis HH','quick_hours')
         if u['role']=='admin':
-            assigned=all_rows('SELECT DISTINCT u.id,u.name,r.rate_cents FROM users u JOIN assignments a ON a.user_id=u.id LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1')
+            assigned=all_rows('SELECT DISTINCT u.id,u.name,r.rate_cents FROM users u JOIN assignments a ON a.user_id=u.id LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1 AND u.deleted=0')
             missing=[x for x in assigned if x['rate_cents'] is None]
             with st.container(border=True,key='priority_close'):
                 st.markdown('**Preparación del cierre**')
@@ -283,7 +284,7 @@ elif page in ('Mis HH','Registrar horas'):
                     if not description.strip():raise ValueError('Describe el trabajo realizado.')
                     with engine().begin() as c:
                         valid=c.execute(text('''SELECT a.id FROM activities a JOIN projects p ON p.id=a.project_id JOIN activity_assignments aa ON aa.activity_id=a.id
-                            WHERE a.id=:aid AND p.id=:pid AND p.status='activo' AND a.active=1 AND aa.user_id=:uid'''),dict(aid=activity_id,pid=pid,uid=u['id'])).first()
+                            WHERE a.id=:aid AND p.id=:pid AND p.status='activo' AND p.deleted=0 AND a.active=1 AND aa.user_id=:uid'''),dict(aid=activity_id,pid=pid,uid=u['id'])).first()
                         if not valid:raise ValueError('La actividad ya no está disponible para registrar HH.')
                         day_q=c.execute(text("SELECT COALESCE(SUM(quarters),0) FROM entries WHERE user_id=:u AND work_date=:d AND state NOT IN ('rechazado','observado')"),dict(u=u['id'],d=work_date)).scalar()
                         if day_q+q>48:raise ValueError('La jornada no puede superar 12 HH.')
@@ -347,7 +348,7 @@ elif page=='Proyectos y actividades':
     section_note('Organiza el proyecto','Primero crea el proyecto y asigna un supervisor. Después agrega sus actividades y revisa las horas presupuestadas.')
     with st.expander('Nuevo proyecto'):
         with st.form('newproj'):
-            code=st.text_input('Código (único)');name=st.text_input('Nombre');supervisors=all_rows("SELECT id,name FROM users WHERE role IN ('supervisor','admin') AND active=1 ORDER BY name")
+            code=st.text_input('Código (único)');name=st.text_input('Nombre');supervisors=all_rows("SELECT id,name FROM users WHERE role IN ('supervisor','admin') AND active=1 AND deleted=0 ORDER BY name")
             sup=choose('Supervisor responsable',supervisors,empty=True,empty_label='Sin asignar');save=st.form_submit_button('Crear proyecto')
         if save:
             try:
@@ -356,6 +357,17 @@ elif page=='Proyectos y actividades':
                     audit_event(c,'crear_proyecto','project',iid)
                 st.rerun()
             except Exception as e:st.error(str(e))
+    with st.expander('Proyectos eliminados · recuperar'):
+        removed=all_rows('SELECT id,code,name FROM projects WHERE deleted=1 ORDER BY code')
+        if removed:
+            recover=choose('Proyecto a recuperar',removed,k='restore_project')
+            st.caption('Se recupera desactivado, con sus actividades, presupuesto e historial intactos. Después puedes reactivarlo.')
+            if st.button('Recuperar proyecto'):
+                try:
+                    with engine().begin() as c:restore_project(c,u['id'],recover)
+                    st.rerun()
+                except Exception as exc:st.error(str(exc))
+        else:st.caption('No hay proyectos eliminados.')
     projs=projects_access();pid=choose('Selecciona proyecto',projs)
     if pid:
         p=next(x for x in projs if x['id']==pid)
@@ -363,10 +375,11 @@ elif page=='Proyectos y actividades':
         with settings_tab:
             with st.form('change-project'):
                 code=st.text_input('Código',value=p['code']);name=st.text_input('Nombre',value=p['name']);status=st.selectbox('Estado',['activo','desactivado','terminado'],index=['activo','desactivado','terminado'].index(p['status']))
-                sup=choose('Supervisor',all_rows("SELECT id,name FROM users WHERE role IN ('supervisor','admin') AND active=1"),empty=True,selected_id=p['supervisor_id'],empty_label='Sin asignar',k=f'supervisor_{pid}')
+                sup=choose('Supervisor',all_rows("SELECT id,name FROM users WHERE role IN ('supervisor','admin') AND active=1 AND deleted=0"),empty=True,selected_id=p['supervisor_id'],empty_label='Sin asignar',k=f'supervisor_{pid}')
                 if st.form_submit_button('Guardar proyecto'):
                     with engine().begin() as c:
-                        c.execute(text('UPDATE projects SET code=:cd,name=:n,status=:s,supervisor_id=:sup WHERE id=:pid'),dict(cd=code.strip(),n=name.strip(),s=status,sup=sup,pid=pid))
+                        result=c.execute(text('UPDATE projects SET code=:cd,name=:n,status=:s,supervisor_id=:sup WHERE id=:pid AND deleted=0'),dict(cd=code.strip(),n=name.strip(),s=status,sup=sup,pid=pid))
+                        if result.rowcount!=1:raise ValueError('El proyecto ya no está disponible. Actualiza la página.')
                         audit_event(c,'editar_proyecto','project',pid,'Estado '+status)
                     st.rerun()
             st.info('Los proyectos desactivados o terminados bloquean la carga y corrección de HH, pero conservan el historial.')
@@ -376,6 +389,14 @@ elif page=='Proyectos y actividades':
                 if col.button(label,disabled=p['status']==new_state,use_container_width=True):
                     try:
                         with engine().begin() as c:set_project_status(c,u['id'],pid,new_state,p['status'])
+                        st.rerun()
+                    except Exception as exc:st.error(str(exc))
+            with st.expander('Eliminar proyecto'):
+                st.warning('Se retirará de la plataforma y bloqueará nuevas horas. Conservaremos sus actividades, presupuestos, horas y liquidaciones. Puedes recuperarlo desde Proyectos eliminados.')
+                confirmed=st.checkbox(f"Confirmo eliminar {p['code']} · {p['name']}",key=f'delete_project_confirm_{pid}')
+                if st.button('Eliminar proyecto',disabled=not confirmed,key=f'delete_project_{pid}'):
+                    try:
+                        with engine().begin() as c:delete_project(c,u['id'],pid)
                         st.rerun()
                     except Exception as exc:st.error(str(exc))
         with activities_tab:
@@ -411,7 +432,7 @@ elif page=='Usuarios y tarifas':
     st.caption('Las tarifas no tienen fecha de vigencia. Los cierres anteriores conservan la tarifa congelada.')
     accounts_tab,rates_tab,assignments_tab=st.tabs(['Usuarios y accesos','Tarifas por hora','Asignaciones'])
     with accounts_tab:
-        users=all_rows('SELECT id,username,name,role,active,must_change_pw FROM users ORDER BY name')
+        users=all_rows('SELECT id,username,name,role,active,must_change_pw FROM users WHERE deleted=0 ORDER BY name')
         df=pd.DataFrame([dict(ID=x['id'],Usuario=x['username'],Nombre=x['name'],Rol=x['role'],Activo=bool(x['active'])) for x in users])
         edited=st.data_editor(df,hide_index=True,use_container_width=True,disabled=['ID'],column_config={'Rol':st.column_config.SelectboxColumn(options=['admin','supervisor','trabajador'])},key='useredit')
         if st.button('Guardar cambios de usuarios',type='primary'):
@@ -422,7 +443,8 @@ elif page=='Usuarios y tarifas':
                         if row['Rol']=='admin' and row['Activo']:active_admins+=1
                     if active_admins<1:raise ValueError('Debe existir al menos un administrador activo.')
                     for _,row in edited.iterrows():
-                        c.execute(text('UPDATE users SET username=:login,name=:name,role=:role,active=:active WHERE id=:id'),dict(login=str(row['Usuario']).lower().strip(),name=str(row['Nombre']).strip(),role=row['Rol'],active=int(row['Activo']),id=int(row['ID'])))
+                        result=c.execute(text('UPDATE users SET username=:login,name=:name,role=:role,active=:active WHERE id=:id AND deleted=0'),dict(login=str(row['Usuario']).lower().strip(),name=str(row['Nombre']).strip(),role=row['Rol'],active=int(row['Activo']),id=int(row['ID'])))
+                        if result.rowcount!=1:raise ValueError('Un usuario ya no está disponible. Actualiza la página.')
                     audit_event(c,'edicion_usuarios','users')
                 st.success('Usuarios actualizados.');st.rerun()
             except Exception as exc:st.error(str(exc))
@@ -462,9 +484,33 @@ elif page=='Usuarios y tarifas':
                         with engine().begin() as c:reset_password(c,u['id'],target,temporary)
                         st.success('Contraseña restablecida. Entrega la temporal al colaborador; debe cambiarla al ingresar.')
                     except Exception as exc:st.error(str(exc))
+        with st.expander('Eliminar usuario'):
+            removable=[x for x in users if x['id']!=u['id']]
+            if removable:
+                target=choose('Usuario a eliminar',removable,k='delete_user_target')
+                target_name=next(x['name'] for x in removable if x['id']==target)
+                st.warning('Se bloqueará su acceso y se retirará de usuarios y asignaciones. Sus horas, tarifas y liquidaciones anteriores se conservan. Tu propia cuenta no puede eliminarse.')
+                confirmed=st.checkbox(f'Confirmo eliminar a {target_name}',key=f'delete_user_confirm_{target}')
+                if st.button('Eliminar usuario',disabled=not confirmed,key=f'delete_user_{target}'):
+                    try:
+                        with engine().begin() as c:delete_user(c,u['id'],target)
+                        st.rerun()
+                    except Exception as exc:st.error(str(exc))
+            else:st.caption('No hay otros usuarios para eliminar.')
+        with st.expander('Usuarios eliminados · recuperar'):
+            removed=all_rows('SELECT id,name,username FROM users WHERE deleted=1 ORDER BY name')
+            if removed:
+                recover=choose('Usuario a recuperar',removed,k='restore_user')
+                st.caption('Se recupera inactivo y conserva sus asignaciones e historial. Actívalo en la tabla cuando corresponda.')
+                if st.button('Recuperar usuario'):
+                    try:
+                        with engine().begin() as c:restore_user(c,u['id'],recover)
+                        st.rerun()
+                    except Exception as exc:st.error(str(exc))
+            else:st.caption('No hay usuarios eliminados.')
     with rates_tab:
         st.subheader('Tarifas estándar por HH')
-        rates=all_rows('SELECT u.id,u.name,r.rate_cents FROM users u LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1 ORDER BY u.name')
+        rates=all_rows('SELECT u.id,u.name,r.rate_cents FROM users u LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1 AND u.deleted=0 ORDER BY u.name')
         rdf=pd.DataFrame([dict(ID=r['id'],Trabajador=r['name'],Tarifa_Soles=round((r['rate_cents'] or 0)/100,2)) for r in rates])
         edited_rates=st.data_editor(rdf,hide_index=True,use_container_width=True,disabled=['ID','Trabajador'],key='rates_edit')
         if st.button('Guardar tarifas',type='primary'):
@@ -479,10 +525,10 @@ elif page=='Usuarios y tarifas':
             except Exception as e:st.error(str(e))
     with assignments_tab:
         st.subheader('Actividades por colaborador')
-        people=all_rows('SELECT id,name,username,active FROM users ORDER BY name')
+        people=all_rows('SELECT id,name,username,active FROM users WHERE deleted=0 ORDER BY name')
         person=choose('Colaborador',people,k='assignment_person')
         if person:
-            assigned_rows=all_rows("SELECT p.code project,p.name project_name,p.status,a.code activity_code,a.name activity,a.active,aa.planned_quarters FROM activity_assignments aa JOIN activities a ON a.id=aa.activity_id JOIN projects p ON p.id=a.project_id WHERE aa.user_id=:uid ORDER BY p.code,a.code",{'uid':person})
+            assigned_rows=all_rows("SELECT p.code project,p.name project_name,p.status,a.code activity_code,a.name activity,a.active,aa.planned_quarters FROM activity_assignments aa JOIN activities a ON a.id=aa.activity_id JOIN projects p ON p.id=a.project_id WHERE aa.user_id=:uid AND p.deleted=0 ORDER BY p.code,a.code",{'uid':person})
             if assigned_rows:
                 st.dataframe(pd.DataFrame([dict(Proyecto=f"{r['project']} · {r['project_name']}",Estado_proyecto=r['status'],EDT=r['activity_code'],Actividad=r['activity'],Activa=bool(r['active']),HH_planificadas=r['planned_quarters']/4) for r in assigned_rows]),hide_index=True,use_container_width=True)
             else:st.info('Este colaborador todavía no tiene actividades asignadas.')
@@ -535,7 +581,7 @@ elif page=='Importar Excel':
                 if cross:preview.append(dict(code=code,name=str(title).strip(),cross=cross,budget=sum(q for _,q in cross)))
             st.write(f'{len(persons)} profesionales identificados · {len(preview)} actividades asignables.')
             st.dataframe(pd.DataFrame([dict(EDT=x['code'],Actividad=x['name'],Presupuesto_HH=x['budget']/4,Profesionales=', '.join(n for n,_ in x['cross'])) for x in preview]),use_container_width=True,hide_index=True)
-            known_names={norm(row['name']) for row in all_rows('SELECT name FROM users')}
+            known_names={norm(row['name']) for row in all_rows('SELECT name FROM users WHERE deleted=0')}
             new_people=[fullname for _,fullname in persons if norm(fullname) not in known_names]
             credential_plan={}
             if new_people:
@@ -548,8 +594,9 @@ elif page=='Importar Excel':
             if st.button('Confirmar importación de matriz',type='primary'):
                 created_credentials=[]
                 with engine().begin() as c:
+                    if not c.execute(text('SELECT id FROM projects WHERE id=:id AND deleted=0'),{'id':pid}).first():raise ValueError('El proyecto ya no está disponible.')
                     mapping={}
-                    existing_people={norm(row['name']):row['id'] for row in c.execute(text('SELECT id,name FROM users')).mappings().all()}
+                    existing_people={norm(row['name']):row['id'] for row in c.execute(text('SELECT id,name FROM users WHERE deleted=0')).mappings().all()}
                     for _,fullname in persons:
                         existing=existing_people.get(norm(fullname))
                         if existing:mapping[fullname]=existing;continue
@@ -583,7 +630,7 @@ elif page=='Importar Excel':
 
 elif page=='Liquidaciones':
     section_note('Cierre del periodo','El corte considera la fecha de trabajo y de aprobación. Cada registro se liquida una sola vez; la tarifa queda congelada en el cierre.')
-    cutoff=st.date_input('Fecha de corte',date.today());workers=all_rows("SELECT id,name FROM users WHERE role IN ('trabajador','supervisor','admin') AND active=1 ORDER BY name")
+    cutoff=st.date_input('Fecha de corte',date.today());workers=all_rows("SELECT id,name FROM users WHERE role IN ('trabajador','supervisor','admin') AND active=1 AND deleted=0 ORDER BY name")
     candidates=all_rows('''SELECT us.id,us.name,COUNT(e.id) records,COALESCE(SUM(e.quarters),0) quarters,r.rate_cents
         FROM users us JOIN entries e ON e.user_id=us.id LEFT JOIN rates r ON r.user_id=us.id
         WHERE e.state='aprobado' AND e.liquidation_id IS NULL AND e.work_date<=:cutoff AND e.approval_at::date<=:cutoff

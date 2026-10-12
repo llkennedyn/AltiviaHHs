@@ -20,7 +20,7 @@ def name_parts(fullname):
 
 
 def require_admin(c,actor):
-    user=c.execute(text('SELECT role,active FROM users WHERE id=:id'),{'id':actor}).mappings().first()
+    user=c.execute(text('SELECT role,active FROM users WHERE id=:id AND deleted=0'),{'id':actor}).mappings().first()
     if not user or user['role']!='admin' or not user['active']:raise ValueError('Solo un administrador activo puede realizar esta operación.')
 
 
@@ -46,15 +46,15 @@ def reset_password(c,actor,user_id,password):
     require_admin(c,actor)
     if user_id==actor:raise ValueError('Selecciona otro colaborador para restablecer su acceso.')
     if len(password)<6:raise ValueError('La contraseña temporal debe tener al menos 6 caracteres.')
-    if not c.execute(text('SELECT id FROM users WHERE id=:id'),{'id':user_id}).first():raise ValueError('El colaborador ya no existe.')
+    if not c.execute(text('SELECT id FROM users WHERE id=:id AND deleted=0'),{'id':user_id}).first():raise ValueError('El colaborador ya no está disponible.')
     c.execute(text('UPDATE users SET pw=:pw,must_change_pw=1 WHERE id=:id'),dict(pw=generate_password_hash(password),id=user_id))
     log(c,actor,'restablecer_contrasena','user',user_id,'Cambio obligatorio al ingresar')
 
 
 def replace_assignments(c,actor,user_id,project_id,selected_ids,expected_ids,project_access=True,expected_access=None):
     require_admin(c,actor)
-    if not c.execute(text('SELECT id FROM users WHERE id=:id'),{'id':user_id}).first():raise ValueError('Colaborador no disponible.')
-    if not c.execute(text('SELECT id FROM projects WHERE id=:id'),{'id':project_id}).first():raise ValueError('Proyecto no disponible.')
+    if not c.execute(text('SELECT id FROM users WHERE id=:id AND deleted=0'),{'id':user_id}).first():raise ValueError('Colaborador no disponible.')
+    if not c.execute(text('SELECT id FROM projects WHERE id=:id AND deleted=0'),{'id':project_id}).first():raise ValueError('Proyecto no disponible.')
     available={r['id'] for r in c.execute(text('SELECT id FROM activities WHERE project_id=:pid'),{'pid':project_id}).mappings().all()}
     current={r['activity_id'] for r in c.execute(text('SELECT aa.activity_id FROM activity_assignments aa JOIN activities a ON a.id=aa.activity_id WHERE aa.user_id=:uid AND a.project_id=:pid'),dict(uid=user_id,pid=project_id)).mappings().all()}
     selected=set(selected_ids)
@@ -74,6 +74,39 @@ def replace_assignments(c,actor,user_id,project_id,selected_ids,expected_ids,pro
 def set_project_status(c,actor,project_id,status,expected_status):
     require_admin(c,actor)
     if status not in ('activo','desactivado','terminado'):raise ValueError('Estado inválido.')
-    result=c.execute(text('UPDATE projects SET status=:status WHERE id=:id AND status=:expected'),dict(status=status,id=project_id,expected=expected_status))
+    result=c.execute(text('UPDATE projects SET status=:status WHERE id=:id AND status=:expected AND deleted=0'),dict(status=status,id=project_id,expected=expected_status))
     if result.rowcount!=1:raise ValueError('El proyecto cambió. Actualiza la pantalla antes de continuar.')
     log(c,actor,'estado_proyecto','project',project_id,status)
+
+
+def delete_user(c,actor,user_id):
+    require_admin(c,actor)
+    if user_id==actor:raise ValueError('No puedes eliminar tu propia cuenta.')
+    user=c.execute(text('SELECT role,active FROM users WHERE id=:id AND deleted=0'),{'id':user_id}).mappings().first()
+    if not user:raise ValueError('El usuario ya fue eliminado o no existe.')
+    if user['role']=='admin' and user['active']:
+        count=c.execute(text("SELECT COUNT(*) FROM users WHERE role='admin' AND active=1 AND deleted=0")).scalar()
+        if count<=1:raise ValueError('Debe conservarse al menos un administrador activo.')
+    c.execute(text('UPDATE users SET deleted=1,active=0 WHERE id=:id'),{'id':user_id})
+    log(c,actor,'eliminar_usuario','user',user_id,'Eliminación recuperable; historial conservado')
+
+
+def delete_project(c,actor,project_id):
+    require_admin(c,actor)
+    result=c.execute(text("UPDATE projects SET deleted=1,status='desactivado' WHERE id=:id AND deleted=0"),{'id':project_id})
+    if result.rowcount!=1:raise ValueError('El proyecto ya fue eliminado o no existe.')
+    log(c,actor,'eliminar_proyecto','project',project_id,'Eliminación recuperable; historial conservado')
+
+
+def restore_user(c,actor,user_id):
+    require_admin(c,actor)
+    result=c.execute(text('UPDATE users SET deleted=0,active=0 WHERE id=:id AND deleted=1'),{'id':user_id})
+    if result.rowcount!=1:raise ValueError('El usuario ya fue restaurado o no existe.')
+    log(c,actor,'restaurar_usuario','user',user_id,'Restaurado inactivo; activar desde Usuarios y accesos')
+
+
+def restore_project(c,actor,project_id):
+    require_admin(c,actor)
+    result=c.execute(text("UPDATE projects SET deleted=0,status='desactivado' WHERE id=:id AND deleted=1"),{'id':project_id})
+    if result.rowcount!=1:raise ValueError('El proyecto ya fue restaurado o no existe.')
+    log(c,actor,'restaurar_proyecto','project',project_id,'Restaurado desactivado')
