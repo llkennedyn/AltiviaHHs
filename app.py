@@ -84,9 +84,9 @@ def authenticate():
     if me()['must_change_pw']:
         st.title('Cambiar contraseña temporal')
         with st.form('change-pwd'):
-            pwd=st.text_input('Nueva contraseña (mínimo 12 caracteres)',type='password');again=st.text_input('Repetir nueva contraseña',type='password');ok=st.form_submit_button('Actualizar contraseña')
+            pwd=st.text_input('Nueva contraseña (mínimo 6 caracteres)',type='password');again=st.text_input('Repetir nueva contraseña',type='password');ok=st.form_submit_button('Actualizar contraseña')
         if ok:
-            if len(pwd)<12 or pwd!=again:st.error('Usa una contraseña de al menos 12 caracteres, idéntica en los dos campos.')
+            if len(pwd)<6 or pwd!=again:st.error('Usa una contraseña de al menos 6 caracteres, idéntica en los dos campos.')
             else:
                 with engine().begin() as c:
                     c.execute(text('UPDATE users SET pw=:p,must_change_pw=0 WHERE id=:i'),dict(p=generate_password_hash(pwd),i=me()['id']))
