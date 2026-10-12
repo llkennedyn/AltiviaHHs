@@ -68,7 +68,7 @@ def authenticate():
         left, spacer, right = st.columns([1.15,.12,1])
         with left:login_intro()
         with right:
-            st.markdown('<div style="height:90px"></div>',unsafe_allow_html=True)
+            st.markdown('<div class="login-spacer"></div>',unsafe_allow_html=True)
             st.subheader('Bienvenido a ALTIVIA')
             st.caption('Ingresa con el usuario que te asignó el administrador.')
             with st.form('login'):

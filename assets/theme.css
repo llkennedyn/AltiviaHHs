@@ -76,10 +76,11 @@ div[data-testid="stTabs"] [role="tab"]:focus-visible{outline:2px solid #077e78;o
 section[data-testid="stSidebar"] .stButton button{background:#1d4658;border:1px solid #60828f;color:white}
 .section-note{background:#f2f8f8;border-color:#cbdfe1;color:#476975}
 .project-card{border-color:#d5e4ed;border-radius:16px;box-shadow:0 4px 16px #13364a03}
+.login-spacer{height:90px}
 .login-hero{min-height:415px;border-radius:20px}.login-hero h1{padding:0;font-size:38px!important}
 .login-features{color:#dcf2f2}.login-hero p{color:#e1f4f7}
 .empty-state{background:white;border:1px dashed #c4d9e6;border-radius:16px;text-align:center;padding:45px 25px;margin:18px 0 24px}
 .empty-state strong{display:block;color:#13364a;font-size:15px;font-weight:600}.empty-state p{color:#668293;font-size:14px;margin:10px 0 0}
 .empty-icon{font-size:28px;color:#077e78;margin-bottom:16px}
-@media(max-width:900px){.page-header{padding:22px}.page-header h1{font-size:1.7rem!important}.login-hero h1{font-size:30px!important}.empty-state{padding:30px 18px}}
+@media(max-width:900px){.page-header{padding:22px}.page-header h1{font-size:1.7rem!important}.login-hero{min-height:0;padding:24px}.login-hero h1{font-size:30px!important;margin:12px 0}.login-hero p{margin-bottom:0}.login-features{display:none}.login-spacer{height:8px}.empty-state{padding:30px 18px}}
 </style>
