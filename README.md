@@ -52,6 +52,8 @@ Tarifa estándar congelada por línea al liquidar. Presupuesto total por activid
 
 La plataforma usa el logo corporativo y una presentación en azul ALTIVIA. El centro gerencial muestra presupuesto, horas registradas, aprobadas y pendientes, tarjetas por proyecto y accesos directos a las acciones del administrador. Los filtros del reporte no limitan la bandeja de aprobación.
 
+El rol **trabajador** tiene únicamente **Registrar horas** y **Mi historial**. No accede al centro gerencial, presupuestos proyectados, tarifas ni registros de otros profesionales. La navegación se valida en el servidor para impedir acceso mediante un estado de sesión antiguo. El historial muestra las horas propias y su estado, y permite corregir las observaciones.
+
 En **Usuarios y tarifas**, utiliza las pestañas **Usuarios y accesos**, **Tarifas por hora** y **Asignaciones**. En **Proyectos y actividades**, los datos del proyecto y la edición del presupuesto se organizan en pestañas independientes. La guía del administrador está disponible en el centro gerencial.
 
 Para actualizar esta interfaz, conserva juntos `app.py`, `ui.py`, `assets/` y `.streamlit/config.toml`, además de los módulos de almacenamiento. Las credenciales siguen en la configuración privada de Streamlit. El rediseño no requiere migrar listas ni modificar registros existentes.

@@ -20,6 +20,11 @@ DESCRIPTIONS = {
 }
 ICONS = ['◫', '◷', '◉', '✓', '▥', '▦', '♙', '↥', '▤', '≡']
 NAV_ICONS = dict(zip(DESCRIPTIONS, ICONS))
+DESCRIPTIONS.update({
+    'Registrar horas': ('Registrar mis horas', 'Selecciona tu proyecto y actividad, e indica el trabajo realizado.'),
+    'Mi historial': ('Mi historial de horas', 'Consulta tus registros, su estado de revisión y las observaciones recibidas.'),
+})
+NAV_ICONS.update({'Registrar horas': '＋', 'Mi historial': '◷'})
 
 def apply_theme():
     st.markdown((ROOT / 'assets' / 'theme.css').read_text(encoding='utf-8'), unsafe_allow_html=True)

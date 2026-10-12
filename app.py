@@ -11,6 +11,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import load_workbook
 from db import engine, init_schema, one, all_rows, scalar, exec_sql, log, reset_context
 from sharepoint_graph import setting
+from access import pages_for_role
 from ui import apply_theme, brand, page_header, login_intro, section_note, project_card, shortcut, NAV_ICONS
 
 st.set_page_config(page_title='ALTIVIA · HH Control',page_icon=str(__import__('pathlib').Path(__file__).parent/'assets'/'altivia-logo.png'),layout='wide',initial_sidebar_state='expanded')
@@ -98,10 +99,12 @@ authenticate()
 u=me()
 brand(sidebar=True)
 st.sidebar.caption('ESPACIO DE TRABAJO')
-menus=['Centro gerencial','Mis HH']
-if u['role'] in ('admin','supervisor'):menus+=['HH por profesional','Aprobaciones','Presupuestos EDT']
-if u['role']=='admin':menus+=['Proyectos y actividades','Usuarios y tarifas','Importar Excel','Liquidaciones','Auditoría']
+menus=pages_for_role(u['role'])
+if not menus:st.error('Acceso no autorizado.');st.stop()
+# Validate on the server, including sessions whose role or navigation has changed.
+if st.session_state.get('navigation') not in menus:st.session_state['navigation']=menus[0]
 page=st.sidebar.radio('Navegación',menus,key='navigation',format_func=lambda x:f'{NAV_ICONS[x]}  {x}')
+if page not in pages_for_role(u['role']):st.error('Acceso no autorizado.');st.stop()
 st.sidebar.divider()
 st.sidebar.caption(f"{u['name']} · {u['role'].capitalize()}")
 if st.sidebar.button('Cerrar sesión'):
@@ -135,7 +138,43 @@ def date_filters():
     if since and until and since>until:st.error('La fecha inicial supera la final.');st.stop()
     return pid,since,until
 
+def render_personal_history():
+    history=entries_query(worker=u['id'])[:250]
+    if not history:
+        st.info('Todavía no tienes horas registradas. Ingresa a Registrar horas para enviar tu primer registro.')
+        return
+    states={'pendiente':'Pendiente','aprobado':'Aprobado','liquidado':'Aprobado','observado':'Observado','rechazado':'Rechazado'}
+    c1,c2,c3=st.columns(3)
+    c1.metric('Mis horas registradas',f"{sum(r['quarters'] for r in history)/4:,.2f} HH")
+    c2.metric('Pendientes de revisión',f"{sum(r['quarters'] for r in history if r['state']=='pendiente')/4:,.2f} HH")
+    c3.metric('Aprobadas',f"{sum(r['quarters'] for r in history if r['state'] in ('aprobado','liquidado'))/4:,.2f} HH")
+    st.caption('Resumen de tus últimos 250 registros. Los filtros siguientes se aplican al detalle.')
+    c1,c2=st.columns(2)
+    with c1:selected_project=st.selectbox('Filtrar mi proyecto',['Todos']+sorted({r['project'] for r in history}),key='personal_project')
+    with c2:selected_state=st.selectbox('Estado de mis horas',['Todos','Pendiente','Aprobado','Observado','Rechazado'],key='personal_state')
+    filtered=[r for r in history if (selected_project=='Todos' or r['project']==selected_project) and (selected_state=='Todos' or states[r['state']]==selected_state)]
+    if filtered:
+        st.dataframe(pd.DataFrame([dict(ID=r['id'],Fecha=r['work_date'],Proyecto=r['project'],EDT=r['activity_code'],Actividad=r['activity'],HH=r['quarters']/4,Estado=states[r['state']],Descripción=r['description'],Observación=r['note']) for r in filtered]),hide_index=True,use_container_width=True,column_config={'HH':st.column_config.NumberColumn('Horas registradas',format='%.2f')})
+    else:st.info('No hay registros que coincidan con estos filtros.')
+    observed=[r for r in history if r['state']=='observado']
+    if observed:
+        st.subheader('Corregir registros observados')
+        eid=st.selectbox('Registro observado', [r['id'] for r in observed],format_func=lambda i:f"#{i} · {next(x['activity'] for x in observed if x['id']==i)}")
+        r=next(x for x in observed if x['id']==eid)
+        with st.form('fix'):
+            h=st.number_input('HH corregidas',value=r['quarters']/4,min_value=.25,max_value=12.,step=.25)
+            desc=st.text_area('Descripción corregida',value=r['description'])
+            if st.form_submit_button('Reenviar'):
+                with engine().begin() as c:
+                    result=c.execute(text('''UPDATE entries SET quarters=:q,description=:d,state='pendiente',note='',approval_by=NULL,approval_at=NULL,updated_at=NOW()
+                        WHERE id=:id AND user_id=:uid AND state='observado' AND EXISTS (SELECT 1 FROM activities a JOIN projects p ON p.id=a.project_id WHERE a.id=entries.activity_id AND p.status='activo' AND a.active=1)'''),dict(q=hours_to_quarters(h),d=desc,id=eid,uid=u['id']))
+                    if result.rowcount!=1:raise ValueError('Registro no disponible para corrección.')
+                    audit_event(c,'corregir_hh','entry',eid)
+                st.rerun()
+
+
 if page=='Centro gerencial':
+    require(('admin','supervisor'))
     with st.container(border=True):
         st.caption('ALCANCE DEL REPORTE')
         pid,start,end=date_filters()
@@ -211,7 +250,7 @@ if page=='Centro gerencial':
                 st.caption('Aprueba el trabajo, controla el presupuesto y liquida las horas aprobadas por fecha de corte.')
                 shortcut('Bandeja de aprobaciones','Aprobaciones','guide_review')
 
-elif page=='Mis HH':
+elif page in ('Mis HH','Registrar horas'):
     section_note('Registro diario','Selecciona proyecto y actividad, indica las horas y describe el trabajo realizado. Máximo 12 HH por día.')
     projs=projects_access(False)
     if not projs:st.info('No tienes proyectos activos asignados.')
@@ -243,24 +282,12 @@ elif page=='Mis HH':
                         audit_event(c,'registrar_hh','entry',eid)
                     st.success('HH registradas y enviadas para aprobación.');st.rerun()
                 except Exception as exc:st.error(str(exc))
-    st.subheader('Historial personal')
-    history=entries_query(worker=u['id'])[:250]
-    st.dataframe(pd.DataFrame([dict(ID=r['id'],Fecha=r['work_date'],Proyecto=r['project'],EDT=r['activity_code'],Actividad=r['activity'],HH=r['quarters']/4,Estado=r['state'],Observacion=r['note']) for r in history]),hide_index=True,use_container_width=True)
-    observed=[r for r in history if r['state']=='observado']
-    if observed:
-        st.subheader('Corregir registros observados')
-        eid=st.selectbox('Registro observado', [r['id'] for r in observed],format_func=lambda i:f"#{i} · {next(x['activity'] for x in observed if x['id']==i)}")
-        r=next(x for x in observed if x['id']==eid)
-        with st.form('fix'):
-            h=st.number_input('HH corregidas',value=r['quarters']/4,min_value=.25,max_value=12.,step=.25)
-            desc=st.text_area('Descripción corregida',value=r['description'])
-            if st.form_submit_button('Reenviar'):
-                with engine().begin() as c:
-                    result=c.execute(text('''UPDATE entries SET quarters=:q,description=:d,state='pendiente',note='',approval_by=NULL,approval_at=NULL,updated_at=NOW()
-                        WHERE id=:id AND user_id=:uid AND state='observado' AND EXISTS (SELECT 1 FROM activities a JOIN projects p ON p.id=a.project_id WHERE a.id=entries.activity_id AND p.status='activo' AND a.active=1)'''),dict(q=hours_to_quarters(h),d=desc,id=eid,uid=u['id']))
-                    if result.rowcount!=1:raise ValueError('Registro no disponible para corrección.')
-                    audit_event(c,'corregir_hh','entry',eid)
-                st.rerun()
+    if page=='Mis HH':
+        st.subheader('Historial personal')
+        render_personal_history()
+
+elif page=='Mi historial':
+    render_personal_history()
 
 elif page=='HH por profesional':
     pid,start,end=date_filters();entries=entries_query(pid,start,end)
