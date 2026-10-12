@@ -47,7 +47,7 @@ Las pruebas locales cubren conflictos, interrupciones, respuesta perdida, integr
 
 ## Comportamiento conservado
 
-Tarifa estándar congelada por línea al liquidar. Presupuesto total por actividad aunque se filtren fechas. Excel: hoja `Estimado de Costos`, profesionales J:T/fila 5, códigos/actividades B/C. Liquidaciones internas con reportes, sin integración bancaria. Sin recuperación automática de contraseña ni MFA para usuarios locales.
+Tarifa estándar congelada por línea al liquidar. Presupuesto total por actividad aunque se filtren fechas. Excel: hoja `Estimado de Costos`, profesionales J:T/fila 5, códigos/actividades B/C. Liquidaciones internas con reportes, sin integración bancaria. Recuperación de acceso mediante restablecimiento por un administrador; sin recuperación por correo ni MFA para usuarios locales.
 # Interfaz profesional ALTIVIA
 
 La plataforma usa el logo corporativo y la paleta ALTIVIA: azul `#13364A`, turquesa `#077E78`, gris claro `#E7EEF4` y blanco. El inicio muestra «ALTIVIA · Control de horas». El centro gerencial muestra presupuesto, horas registradas, aprobadas y pendientes, tarjetas por proyecto y accesos directos a las acciones del administrador. Los filtros del reporte no limitan la bandeja de aprobación.
@@ -57,4 +57,14 @@ El rol **trabajador** tiene únicamente **Registrar horas** y **Mi historial**. 
 En **Usuarios y tarifas**, utiliza las pestañas **Usuarios y accesos**, **Tarifas por hora** y **Asignaciones**. En **Proyectos y actividades**, los datos del proyecto y la edición del presupuesto se organizan en pestañas independientes. La guía del administrador está disponible en el centro gerencial.
 
 Para actualizar esta interfaz, conserva juntos `app.py`, `ui.py`, `assets/` y `.streamlit/config.toml`, además de los módulos de almacenamiento. Las credenciales siguen en la configuración privada de Streamlit. El rediseño no requiere migrar listas ni modificar registros existentes.
+
+## Administración de colaboradores
+
+- **Crear colaborador:** ingresa nombres, primer apellido y otros apellidos. El usuario es el primer nombre en minúsculas y sin tildes; se agrega un número si está ocupado. La contraseña inicial es el primer apellido en minúsculas, sin tildes ni espacios, incluso si tiene menos de seis caracteres. El primer ingreso obliga a elegir una contraseña nueva de seis caracteres como mínimo. Esta regla se aplica a cuentas nuevas, no cambia cuentas existentes.
+- **Importar Excel:** revisa y corrige la separación de nombres/apellidos en la tabla de nuevos colaboradores antes de confirmar. Las propuestas automáticas no distinguen todos los nombres o apellidos compuestos. Las cuentas ya existentes conservan usuario y contraseña.
+- **Restablecer contraseña:** en Usuarios y accesos, selecciona otro colaborador y confirma una contraseña temporal de al menos seis caracteres. Se invalidan sus sesiones en la siguiente interacción y se exige un cambio al ingresar. La auditoría no incluye contraseñas.
+- **Asignaciones:** selecciona un colaborador para consultar sus actividades de todos los proyectos; luego elige un proyecto, agrega o retira actividades y guarda. Las selecciones existentes aparecen marcadas. Retirar autorizaciones conserva las horas registradas; conservar una asignación mantiene sus horas planificadas. Puedes retirar también el acceso completo al proyecto.
+- **Proyectos y actividades:** desactiva, termina o reactiva un proyecto desde Datos del proyecto. Para desactivar actividades, desmarca Activa y guarda la tabla. Las restricciones de registro y corrección se aplican por estado del proyecto/actividad; el historial se conserva.
+
+`python tools/admin_smoke.py` comprueba estas operaciones contra Graph exclusivamente en las listas `HH_TEST_`, ya aprovisionadas. Crea datos ficticios, verifica una lectura desde otra instancia y desactiva las cuentas de prueba al finalizar. Conserva los registros para auditoría; no escribe en las listas de producción `HH_`.
 

@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from db import engine, init_schema, one, all_rows, scalar, exec_sql, log, reset_context
 from sharepoint_graph import setting
 from access import pages_for_role
+from admin_ops import create_collaborator, name_parts, reset_password, replace_assignments, set_project_status
 from ui import apply_theme, brand, page_header, login_intro, section_note, project_card, shortcut, NAV_ICONS, sidebar_identity, empty_state
 
 st.set_page_config(page_title='ALTIVIA · HH Control',page_icon=str(__import__('pathlib').Path(__file__).parent/'assets'/'altivia-logo.png'),layout='wide',initial_sidebar_state='expanded')
@@ -22,8 +23,6 @@ except Exception as exc:
     st.error('No se pudo abrir el almacenamiento de ALTIVIA. Revisa la configuración privada y los permisos de conexión.');st.stop()
 
 def norm(v):return ''.join(ch for ch in unicodedata.normalize('NFKD',str(v).casefold()) if not unicodedata.combining(ch)).strip()
-def login_from_name(name):
-    words=re.findall('[a-z0-9]+',norm(name));return words[-1] if words else 'trabajador'
 def hours_to_quarters(v):
     d=Decimal(str(v))
     if d<=0 or d>12 or d*4 != (d*4).to_integral_value():raise ValueError('Ingrese entre 0.25 y 12 HH en incrementos de 0.25.')
@@ -64,7 +63,16 @@ def authenticate():
                     c.execute(text("INSERT INTO users(username,name,pw,role) VALUES(:l,:n,:pw,'admin')"),dict(l=login,n=name.strip(),pw=generate_password_hash(pwd)))
                 st.success('Administrador creado; inicia sesión.');st.rerun()
         st.stop()
-    if not me():
+    current=me()
+    if current:
+        tag=hashlib.sha256(current['pw'].encode()).hexdigest()
+        previous=st.session_state.get('auth_tag')
+        if previous and not hmac.compare_digest(previous,tag):
+            st.session_state.pop('uid',None);st.session_state.pop('auth_tag',None)
+            st.warning('Tu contraseña fue restablecida. Inicia sesión con tu contraseña actual.')
+            current=None
+        else:st.session_state['auth_tag']=tag
+    if not current:
         left, spacer, right = st.columns([1.15,.12,1])
         with left:login_intro()
         with right:
@@ -79,7 +87,7 @@ def authenticate():
         if submitted:
             u=one('SELECT * FROM users WHERE username=:u AND active=1',{'u':login})
             if u and check_password_hash(u['pw'],pwd):
-                st.session_state['uid']=u['id'];st.rerun()
+                st.session_state['uid']=u['id'];st.session_state['auth_tag']=hashlib.sha256(u['pw'].encode()).hexdigest();st.rerun()
             else:st.error('Usuario o contraseña incorrectos.')
         st.stop()
     if me()['must_change_pw']:
@@ -89,9 +97,11 @@ def authenticate():
         if ok:
             if len(pwd)<6 or pwd!=again:st.error('Usa una contraseña de al menos 6 caracteres, idéntica en los dos campos.')
             else:
+                new_hash=generate_password_hash(pwd)
                 with engine().begin() as c:
-                    c.execute(text('UPDATE users SET pw=:p,must_change_pw=0 WHERE id=:i'),dict(p=generate_password_hash(pwd),i=me()['id']))
+                    c.execute(text('UPDATE users SET pw=:p,must_change_pw=0 WHERE id=:i'),dict(p=new_hash,i=me()['id']))
                     audit_event(c,'cambio_contrasena','user',me()['id'])
+                st.session_state['auth_tag']=hashlib.sha256(new_hash.encode()).hexdigest()
                 st.rerun()
         st.stop()
 
@@ -360,12 +370,21 @@ elif page=='Proyectos y actividades':
                         audit_event(c,'editar_proyecto','project',pid,'Estado '+status)
                     st.rerun()
             st.info('Los proyectos desactivados o terminados bloquean la carga y corrección de HH, pero conservan el historial.')
+            st.caption(f"Estado actual: {p['status'].capitalize()} · Cambiar el estado no elimina actividades ni registros.")
+            c1,c2,c3=st.columns(3)
+            for col,label,new_state in [(c1,'Desactivar proyecto','desactivado'),(c2,'Terminar proyecto','terminado'),(c3,'Reactivar proyecto','activo')]:
+                if col.button(label,disabled=p['status']==new_state,use_container_width=True):
+                    try:
+                        with engine().begin() as c:set_project_status(c,u['id'],pid,new_state,p['status'])
+                        st.rerun()
+                    except Exception as exc:st.error(str(exc))
         with activities_tab:
             acts=all_rows('SELECT id,code,name,budget_quarters,active FROM activities WHERE project_id=:pid ORDER BY code',{'pid':pid})
             st.subheader('Actividades · edición en tabla')
+            st.caption('Desmarca Activa para desactivar una actividad y guarda las modificaciones. El presupuesto y el historial se conservan.')
             if acts:
                 df=pd.DataFrame([dict(ID=r['id'],EDT=r['code'],Actividad=r['name'],Presupuesto_HH=r['budget_quarters']/4,Activa=bool(r['active'])) for r in acts])
-                edited=st.data_editor(df,hide_index=True,use_container_width=True,disabled=['ID'],num_rows='fixed',key='activities_edit')
+                edited=st.data_editor(df,hide_index=True,use_container_width=True,disabled=['ID'],num_rows='fixed',key=f'activities_edit_{pid}')
                 if st.button('Guardar modificaciones de actividades',type='primary'):
                     try:
                         with engine().begin() as c:
@@ -407,18 +426,42 @@ elif page=='Usuarios y tarifas':
                     audit_event(c,'edicion_usuarios','users')
                 st.success('Usuarios actualizados.');st.rerun()
             except Exception as exc:st.error(str(exc))
-        with st.expander('Crear usuario manualmente'):
+        with st.expander('Crear colaborador'):
+            st.caption('Usuario: primer nombre en minúsculas. Contraseña inicial: primer apellido en minúsculas y sin tildes. Los nombres repetidos reciben un número. El colaborador debe cambiar la contraseña al ingresar.')
             with st.form('newusr'):
-                name=st.text_input('Nombre completo');login=st.text_input('Usuario (opcional)');role=st.selectbox('Rol',['trabajador','supervisor','admin']);pwd=st.text_input('Contraseña temporal (mín. 6 caracteres)',type='password')
-                if st.form_submit_button('Crear'):
-                    if len(pwd)<6:st.error('La contraseña temporal debe tener al menos 6 caracteres.')
-                    else:
-                        try:
-                            with engine().begin() as c:
-                                uid=c.execute(text('INSERT INTO users(username,name,pw,role,must_change_pw) VALUES(:login,:name,:pw,:role,1) RETURNING id'),dict(login=(login.strip().lower() or login_from_name(name)),name=name.strip(),pw=generate_password_hash(pwd),role=role)).scalar_one()
-                                audit_event(c,'crear_usuario','user',uid)
-                            st.rerun()
-                        except Exception as exc:st.error(str(exc))
+                names=st.text_input('Nombres',placeholder='Ej. Carlos Alberto')
+                first_surname=st.text_input('Primer apellido',placeholder='Ej. Mendoza')
+                other_surnames=st.text_input('Otros apellidos (opcional)',placeholder='Ej. López')
+                role=st.selectbox('Rol',['trabajador','supervisor','admin'])
+                create=st.form_submit_button('Crear colaborador',type='primary')
+            if create:
+                try:
+                    with engine().begin() as c:
+                        created=create_collaborator(c,u['id'],names,first_surname,other_surnames,role)
+                    st.session_state['created_collaborator']=created
+                    st.rerun()
+                except Exception as exc:st.error(str(exc))
+        created=st.session_state.get('created_collaborator')
+        if created:
+            st.success(f"Colaborador creado: {created['name']} · Usuario: {created['username']}")
+            st.caption('La contraseña inicial es su primer apellido, en minúsculas y sin tildes. Entrégale el acceso de forma privada.')
+            if st.button('Cerrar confirmación de creación'):st.session_state.pop('created_collaborator',None);st.rerun()
+        with st.expander('Restablecer contraseña de un colaborador'):
+            others=[x for x in users if x['id']!=u['id']]
+            if not others:st.info('No hay otros colaboradores disponibles.')
+            else:
+                st.caption('La contraseña anterior dejará de funcionar. El colaborador deberá ingresar con la temporal y cambiarla. Sus horas y asignaciones se conservan.')
+                with st.form('reset-user-password'):
+                    target=st.selectbox('Colaborador a restablecer',[x['id'] for x in others],format_func=lambda i:next(f"{x['name']} · {x['username']}" for x in others if x['id']==i))
+                    temporary=st.text_input('Nueva contraseña temporal (mínimo 6 caracteres)',type='password')
+                    repeated=st.text_input('Repetir contraseña temporal',type='password')
+                    reset=st.form_submit_button('Restablecer contraseña',type='primary')
+                if reset:
+                    try:
+                        if temporary!=repeated:raise ValueError('Las contraseñas temporales no coinciden.')
+                        with engine().begin() as c:reset_password(c,u['id'],target,temporary)
+                        st.success('Contraseña restablecida. Entrega la temporal al colaborador; debe cambiarla al ingresar.')
+                    except Exception as exc:st.error(str(exc))
     with rates_tab:
         st.subheader('Tarifas estándar por HH')
         rates=all_rows('SELECT u.id,u.name,r.rate_cents FROM users u LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1 ORDER BY u.name')
@@ -435,18 +478,36 @@ elif page=='Usuarios y tarifas':
                 st.success('Tarifas actualizadas.');st.rerun()
             except Exception as e:st.error(str(e))
     with assignments_tab:
-        with st.container(border=True):
-            st.subheader('Autorizar actividades')
-            st.caption('El profesional podrá registrar horas únicamente en las actividades que selecciones. Las nuevas autorizaciones se agregan a las existentes.')
-            people=all_rows('SELECT id,name FROM users WHERE active=1 ORDER BY name');person=choose('Trabajador',people)
-            pid=choose('Proyecto',projects_access());aa=all_rows('SELECT id,code,name FROM activities WHERE project_id=:pid ORDER BY code',{'pid':pid}) if pid else []
-            selected=st.multiselect('Actividades autorizadas',list(options(aa)),key='assign_act')
-            if st.button('Agregar asignaciones'):
-                with engine().begin() as c:
-                    c.execute(text('INSERT INTO assignments(user_id,project_id) VALUES(:u,:p) ON CONFLICT DO NOTHING'),dict(u=person,p=pid))
-                    for label in selected:c.execute(text('INSERT INTO activity_assignments(user_id,activity_id) VALUES(:u,:a) ON CONFLICT DO NOTHING'),dict(u=person,a=options(aa)[label]))
-                    audit_event(c,'asignar_actividades','user',person)
-                st.success('Asignaciones registradas.')
+        st.subheader('Actividades por colaborador')
+        people=all_rows('SELECT id,name,username,active FROM users ORDER BY name')
+        person=choose('Colaborador',people,k='assignment_person')
+        if person:
+            assigned_rows=all_rows("SELECT p.code project,p.name project_name,p.status,a.code activity_code,a.name activity,a.active,aa.planned_quarters FROM activity_assignments aa JOIN activities a ON a.id=aa.activity_id JOIN projects p ON p.id=a.project_id WHERE aa.user_id=:uid ORDER BY p.code,a.code",{'uid':person})
+            if assigned_rows:
+                st.dataframe(pd.DataFrame([dict(Proyecto=f"{r['project']} · {r['project_name']}",Estado_proyecto=r['status'],EDT=r['activity_code'],Actividad=r['activity'],Activa=bool(r['active']),HH_planificadas=r['planned_quarters']/4) for r in assigned_rows]),hide_index=True,use_container_width=True)
+            else:st.info('Este colaborador todavía no tiene actividades asignadas.')
+            with st.container(border=True):
+                st.subheader('Editar autorizaciones del proyecto')
+                pid=choose('Proyecto a editar',projects_access(),k='assignment_project')
+                if pid:
+                    aa=all_rows('SELECT id,code,name,active FROM activities WHERE project_id=:pid ORDER BY code',{'pid':pid})
+                    current=all_rows('SELECT aa.activity_id FROM activity_assignments aa JOIN activities a ON a.id=aa.activity_id WHERE aa.user_id=:uid AND a.project_id=:pid',dict(uid=person,pid=pid))
+                    current_ids={x['activity_id'] for x in current}
+                    has_access=bool(scalar('SELECT COUNT(*) FROM assignments WHERE user_id=:uid AND project_id=:pid',dict(uid=person,pid=pid)))
+                    revision=hashlib.sha256(str((sorted(current_ids),has_access)).encode()).hexdigest()[:12]
+                    controls=f'assign_{person}_{pid}_{revision}'
+                    access=st.checkbox('Permitir acceso a este proyecto',value=has_access,key=controls+'_access')
+                    opts={f"{x['code']} · {x['name']}"+(' · Inactiva' if not x['active'] else ''):x['id'] for x in aa}
+                    selected=st.multiselect('Actividades autorizadas',list(opts),default=[label for label,aid in opts.items() if aid in current_ids],key=controls+'_activities',disabled=not access)
+                    st.caption('Las actividades actuales aparecen seleccionadas. Puedes agregar o retirar autorizaciones. Se conservan las horas registradas, los presupuestos y las horas planificadas de las asignaciones que mantengas.')
+                    if not access and (has_access or current_ids):st.warning('Al guardar, se retirará el acceso al proyecto y sus actividades para este colaborador. Su historial se conserva.')
+                    elif not access:st.info('Marca Permitir acceso para autorizar este proyecto y seleccionar actividades.')
+                    if st.button('Guardar asignaciones del colaborador',type='primary'):
+                        try:
+                            with engine().begin() as c:
+                                replace_assignments(c,u['id'],person,pid,[opts[label] for label in selected] if access else [],current_ids,access,has_access)
+                            st.rerun()
+                        except Exception as exc:st.error(str(exc))
 
 elif page=='Importar Excel':
     section_note('Antes de importar','Selecciona el proyecto destino. La vista previa te permitirá revisar actividades, profesionales y horas antes de guardar.')
@@ -474,20 +535,29 @@ elif page=='Importar Excel':
                 if cross:preview.append(dict(code=code,name=str(title).strip(),cross=cross,budget=sum(q for _,q in cross)))
             st.write(f'{len(persons)} profesionales identificados · {len(preview)} actividades asignables.')
             st.dataframe(pd.DataFrame([dict(EDT=x['code'],Actividad=x['name'],Presupuesto_HH=x['budget']/4,Profesionales=', '.join(n for n,_ in x['cross'])) for x in preview]),use_container_width=True,hide_index=True)
+            known_names={norm(row['name']) for row in all_rows('SELECT name FROM users')}
+            new_people=[fullname for _,fullname in persons if norm(fullname) not in known_names]
+            credential_plan={}
+            if new_people:
+                st.subheader('Revisar nombres de los nuevos colaboradores')
+                st.caption('Confirma la separación de nombres y apellidos antes de importar. Usuario: primer nombre. Contraseña inicial: primer apellido en minúsculas y sin tildes, incluso si tiene menos de 6 caracteres. Las cuentas existentes no cambian.')
+                proposed=pd.DataFrame([dict(Nombre_en_Excel=fullname,**name_parts(fullname)) for fullname in dict.fromkeys(new_people)])
+                reviewed=st.data_editor(proposed,disabled=['Nombre_en_Excel'],hide_index=True,use_container_width=True,num_rows='fixed',key=f"import_names_{pid}_{hashlib.sha256(file.getvalue()).hexdigest()[:12]}")
+                credential_plan={row['Nombre_en_Excel']:row for _,row in reviewed.iterrows()}
             st.warning('La importación sustituye asignaciones de las actividades incluidas. No sustituye la base completa. Verifica el proyecto.')
             if st.button('Confirmar importación de matriz',type='primary'):
+                created_credentials=[]
                 with engine().begin() as c:
                     mapping={}
+                    existing_people={norm(row['name']):row['id'] for row in c.execute(text('SELECT id,name FROM users')).mappings().all()}
                     for _,fullname in persons:
-                        existing=c.execute(text('SELECT id FROM users WHERE lower(name)=lower(:name)'),{'name':fullname}).scalar()
+                        existing=existing_people.get(norm(fullname))
                         if existing:mapping[fullname]=existing;continue
-                        root=login_from_name(fullname);login=root;seq=2
-                        while c.execute(text('SELECT 1 FROM users WHERE username=:login'),{'login':login}).first():login=f'{root}{seq}';seq+=1
-                        # Random invitation password prevents predictable name-based credentials in public deployment.
-                        initial=secrets.token_urlsafe(18)
-                        uid=c.execute(text('INSERT INTO users(username,name,pw,role,must_change_pw) VALUES(:login,:name,:pw,\'trabajador\',1) RETURNING id'),dict(login=login,name=fullname,pw=generate_password_hash(initial))).scalar_one()
-                        mapping[fullname]=uid
-                        st.session_state.setdefault('new_import_credentials',[]).append((fullname,login,initial))
+                        planned=credential_plan.get(fullname)
+                        if planned is None:raise ValueError(f'Revisa los nombres y apellidos de {fullname} antes de crear su cuenta.')
+                        created=create_collaborator(c,u['id'],planned['Nombres'],planned['Primer_apellido'],planned['Otros_apellidos'])
+                        mapping[fullname]=created['id'];existing_people[norm(fullname)]=created['id']
+                        created_credentials.append((created['name'],created['username'],created['initial_password']))
                     for item in preview:
                         existing=c.execute(text('SELECT id FROM activities WHERE project_id=:pid AND code=:code'),dict(pid=pid,code=item['code'])).scalar()
                         if existing:
@@ -502,10 +572,11 @@ elif page=='Importar Excel':
                             c.execute(text('INSERT INTO activity_assignments(user_id,activity_id,planned_quarters) VALUES(:uid,:aid,:q) ON CONFLICT (user_id,activity_id) DO UPDATE SET planned_quarters=EXCLUDED.planned_quarters'),dict(uid=uid,aid=aid,q=quarters))
                     c.execute(text('INSERT INTO import_log(project_id,filename,actor_id,notes) VALUES(:pid,:file,:actor,:notes)'),dict(pid=pid,file=file.name,actor=u['id'],notes=f'{len(preview)} actividades'))
                     audit_event(c,'importar_excel','project',pid)
+                st.session_state['new_import_credentials']=created_credentials
                 st.success('Importación completada.');st.rerun()
             credentials=st.session_state.get('new_import_credentials',[])
             if credentials:
-                st.warning('Credenciales iniciales aleatorias, mostradas una sola vez. Entrega cada contraseña privadamente.')
+                st.warning('Credenciales iniciales de los nuevos colaboradores. Deben cambiar la contraseña al ingresar. Entrega cada acceso de forma privada.')
                 st.dataframe(pd.DataFrame(credentials,columns=['Nombre','Usuario','Contraseña temporal']),hide_index=True)
                 if st.button('Ocultar credenciales'):st.session_state.pop('new_import_credentials',None);st.rerun()
         except Exception as e:st.error(str(e))
