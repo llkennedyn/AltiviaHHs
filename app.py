@@ -1,4 +1,4 @@
-"""ALTIVIA HH CONTROL — Streamlit native, PostgreSQL edition.
+"""ALTIVIA HH CONTROL — Streamlit native, SharePoint Lists edition.
 Run: streamlit run app.py
 """
 import io, re, secrets, unicodedata, hashlib, hmac
@@ -9,13 +9,15 @@ import streamlit as st
 from sqlalchemy import text
 from werkzeug.security import generate_password_hash, check_password_hash
 from openpyxl import load_workbook
-from db import engine, init_schema, one, all_rows, scalar, exec_sql, log
+from db import engine, init_schema, one, all_rows, scalar, exec_sql, log, reset_context
+from sharepoint_graph import setting
 
 st.set_page_config(page_title='ALTIVIA HH CONTROL',page_icon='📊',layout='wide',initial_sidebar_state='expanded')
 st.markdown('''<style>.block-container{padding-top:1.4rem;max-width:1450px}div[data-testid="stMetric"]{background:#fff;padding:16px;border:1px solid #e2ebef;border-radius:14px}h1,h2,h3{color:#11384b}section[data-testid="stSidebar"]{background:#11384b}section[data-testid="stSidebar"] *{color:#f5f9fc!important}section[data-testid="stSidebar"] button{color:#17364a!important}</style>''',unsafe_allow_html=True)
+reset_context()
 try:init_schema()
 except Exception as exc:
-    st.error('No se pudo conectar a PostgreSQL persistente. Configura DATABASE_URL en los Secrets de Streamlit Cloud.');st.code(str(exc));st.stop()
+    st.error('No se pudo abrir el almacenamiento de ALTIVIA. Revisa la configuración privada y los permisos de conexión.');st.stop()
 
 def norm(v):return ''.join(ch for ch in unicodedata.normalize('NFKD',str(v).casefold()) if not unicodedata.combining(ch)).strip()
 def login_from_name(name):
@@ -41,14 +43,21 @@ def audit_event(c,action,target,tid=None,detail=''):log(c,me()['id'],action,targ
 def authenticate():
     if scalar('SELECT COUNT(*) FROM users')==0:
         st.title('Configuración inicial · ALTIVIA')
-        st.warning('Este formulario crea el primer administrador. Hazlo antes de compartir el enlace.')
+        setup_token=setting('ALTIVIA_SETUP_TOKEN')
+        if not setup_token:
+            st.info('La inicialización está cerrada. El responsable debe habilitar la clave de instalación en la configuración privada.');st.stop()
+        st.warning('Este formulario crea el primer administrador y requiere la clave privada de instalación.')
         with st.form('setup'):
+            supplied_token=st.text_input('Clave de instalación',type='password')
             name=st.text_input('Nombre completo');login=st.text_input('Usuario administrador').lower().strip();pwd=st.text_input('Contraseña (mínimo 12 caracteres)',type='password');confirm=st.text_input('Repetir contraseña',type='password')
             submit=st.form_submit_button('Crear administrador')
         if submit:
-            if not name.strip() or not re.fullmatch('[a-z0-9_.-]{3,40}',login) or len(pwd)<12 or pwd!=confirm:st.error('Verifica el nombre, usuario y contraseña (12 caracteres).')
+            if not hmac.compare_digest(supplied_token,setup_token):st.error('Clave de instalación incorrecta.')
+            elif not name.strip() or not re.fullmatch('[a-z0-9_.-]{3,40}',login) or len(pwd)<12 or pwd!=confirm:st.error('Verifica el nombre, usuario y contraseña (12 caracteres).')
             else:
                 with engine().begin() as c:
+                    if c.execute(text('SELECT COUNT(*) FROM users')).scalar():
+                        st.error('El administrador ya fue creado. Actualiza la página.');st.stop()
                     c.execute(text("INSERT INTO users(username,name,pw,role) VALUES(:l,:n,:pw,'admin')"),dict(l=login,n=name.strip(),pw=generate_password_hash(pwd)))
                 st.success('Administrador creado; inicia sesión.');st.rerun()
         st.stop()

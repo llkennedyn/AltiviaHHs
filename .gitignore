@@ -4,3 +4,11 @@
 *.sqlite*
 __pycache__/
 *.pyc
+.venv/
+*.pem
+*.key
+*.pfx
+*.p12
+local-config*.json
+backups/
+.pytest_cache/
