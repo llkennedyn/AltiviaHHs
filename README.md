@@ -50,7 +50,7 @@ Las pruebas locales cubren conflictos, interrupciones, respuesta perdida, integr
 Tarifa estándar congelada por línea al liquidar. Presupuesto total por actividad aunque se filtren fechas. Excel: hoja `Estimado de Costos`, profesionales J:T/fila 5, códigos/actividades B/C. Liquidaciones internas con reportes, sin integración bancaria. Sin recuperación automática de contraseña ni MFA para usuarios locales.
 # Interfaz profesional ALTIVIA
 
-La plataforma usa el logo corporativo y una presentación en azul ALTIVIA. El centro gerencial muestra presupuesto, horas registradas, aprobadas y pendientes, tarjetas por proyecto y accesos directos a las acciones del administrador. Los filtros del reporte no limitan la bandeja de aprobación.
+La plataforma usa el logo corporativo y la paleta ALTIVIA: azul `#13364A`, turquesa `#077E78`, gris claro `#E7EEF4` y blanco. El inicio muestra «ALTIVIA · Control de horas». El centro gerencial muestra presupuesto, horas registradas, aprobadas y pendientes, tarjetas por proyecto y accesos directos a las acciones del administrador. Los filtros del reporte no limitan la bandeja de aprobación.
 
 El rol **trabajador** tiene únicamente **Registrar horas** y **Mi historial**. No accede al centro gerencial, presupuestos proyectados, tarifas ni registros de otros profesionales. La navegación se valida en el servidor para impedir acceso mediante un estado de sesión antiguo. El historial muestra las horas propias y su estado, y permite corregir las observaciones.
 

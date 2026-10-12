@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 from db import engine, init_schema, one, all_rows, scalar, exec_sql, log, reset_context
 from sharepoint_graph import setting
 from access import pages_for_role
-from ui import apply_theme, brand, page_header, login_intro, section_note, project_card, shortcut, NAV_ICONS
+from ui import apply_theme, brand, page_header, login_intro, section_note, project_card, shortcut, NAV_ICONS, sidebar_identity, empty_state
 
 st.set_page_config(page_title='ALTIVIA · HH Control',page_icon=str(__import__('pathlib').Path(__file__).parent/'assets'/'altivia-logo.png'),layout='wide',initial_sidebar_state='expanded')
 apply_theme()
@@ -98,6 +98,7 @@ def authenticate():
 authenticate()
 u=me()
 brand(sidebar=True)
+sidebar_identity(u)
 st.sidebar.caption('ESPACIO DE TRABAJO')
 menus=pages_for_role(u['role'])
 if not menus:st.error('Acceso no autorizado.');st.stop()
@@ -106,7 +107,6 @@ if st.session_state.get('navigation') not in menus:st.session_state['navigation'
 page=st.sidebar.radio('Navegación',menus,key='navigation',format_func=lambda x:f'{NAV_ICONS[x]}  {x}')
 if page not in pages_for_role(u['role']):st.error('Acceso no autorizado.');st.stop()
 st.sidebar.divider()
-st.sidebar.caption(f"{u['name']} · {u['role'].capitalize()}")
 if st.sidebar.button('Cerrar sesión'):
     st.session_state.clear();st.rerun()
 page_header(page,u)
@@ -141,7 +141,7 @@ def date_filters():
 def render_personal_history():
     history=entries_query(worker=u['id'])[:250]
     if not history:
-        st.info('Todavía no tienes horas registradas. Ingresa a Registrar horas para enviar tu primer registro.')
+        empty_state('Todavía no registras horas','Crea tu primer registro desde Registrar horas.','◷')
         return
     states={'pendiente':'Pendiente','aprobado':'Aprobado','liquidado':'Aprobado','observado':'Observado','rechazado':'Rechazado'}
     c1,c2,c3=st.columns(3)
@@ -175,7 +175,7 @@ def render_personal_history():
 
 if page=='Centro gerencial':
     require(('admin','supervisor'))
-    with st.container(border=True):
+    with st.container(border=True,key='dashboard_filters'):
         st.caption('ALCANCE DEL REPORTE')
         pid,start,end=date_filters()
     projs=[p for p in projects_access() if not pid or p['id']==pid]
@@ -186,8 +186,8 @@ if page=='Centro gerencial':
     approved=sum(e['quarters'] for e in entries if e['state'] in ('aprobado','liquidado'))/4
     pending=sum(e['quarters'] for e in entries if e['state']=='pendiente')/4
     k=st.columns(4)
-    for col,label,val in zip(k,['Presupuesto total','Horas registradas','Horas aprobadas','Pendientes de aprobación'],[budget,total,approved,pending]):
-        col.metric(label,f'{val:,.2f}',help='Horas hombre (HH). El presupuesto corresponde al total de las actividades; las horas siguen los filtros seleccionados.')
+    for col,label,val in zip(k,['Presupuesto total','HH registradas','HH aprobadas','HH por aprobar'],[budget,total,approved,pending]):
+        col.metric(label,f'{val:,.2f} HH',help='Horas hombre (HH). El presupuesto corresponde al total de las actividades; las horas siguen los filtros seleccionados.')
     st.caption('Valores en HH · Presupuesto total de actividades. Consumo y pendientes según los filtros seleccionados.')
     st.markdown('')
     main, side=st.columns([2.1,1],gap='large')
@@ -207,7 +207,7 @@ if page=='Centro gerencial':
             rows.append(dict(Proyecto=f"{p['code']} · {p['name']}",Estado=p['status'],Presupuesto_HH=b,HH_cargadas=q,HH_aprobadas=ap,HH_por_aprobar=pe,Diferencia_HH=b-q,Consumo_pct=round(q/b*100,1) if b else 0))
     with side:
         st.subheader('Tu siguiente acción')
-        with st.container(border=True):
+        with st.container(border=True,key='priority_review'):
             reviewable=[e for e in entries_query() if e['state']=='pendiente' and e['user_id']!=u['id']]
             if u['role'] in ('admin','supervisor'):
                 st.markdown(f"**{len(reviewable)} registros por revisar**")
@@ -220,11 +220,11 @@ if page=='Centro gerencial':
         if u['role']=='admin':
             assigned=all_rows('SELECT DISTINCT u.id,u.name,r.rate_cents FROM users u JOIN assignments a ON a.user_id=u.id LEFT JOIN rates r ON r.user_id=u.id WHERE u.active=1')
             missing=[x for x in assigned if x['rate_cents'] is None]
-            with st.container(border=True):
+            with st.container(border=True,key='priority_close'):
                 st.markdown('**Preparación del cierre**')
                 st.caption(f"{len(missing)} profesionales asignados sin tarifa. Configura sus tarifas antes de liquidar." if missing else 'Consulta las horas aprobadas, elige el corte y revisa los importes antes de cerrar.')
                 shortcut('Configurar tarifas →' if missing else 'Ver liquidaciones →','Usuarios y tarifas' if missing else 'Liquidaciones','quick_close')
-        with st.container(border=True):
+        with st.container(border=True,key='priority_budget'):
             st.markdown('**Control del presupuesto**')
             st.caption('Revisa la dedicación de cada actividad y detecta desviaciones a tiempo.')
             if u['role'] in ('admin','supervisor'):shortcut('Ver presupuesto EDT →','Presupuestos EDT','quick_budget')
@@ -232,7 +232,7 @@ if page=='Centro gerencial':
     with st.expander('Comparativo detallado y descarga'):
         st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True,column_config={'Consumo_pct':st.column_config.ProgressColumn('Consumo (%)',min_value=0,max_value=max(100,max((x['Consumo_pct'] for x in rows),default=100)),format='%.1f%%'),'Presupuesto_HH':st.column_config.NumberColumn('Presupuesto (HH)',format='%.2f'),'HH_cargadas':st.column_config.NumberColumn('Registradas (HH)',format='%.2f'),'Diferencia_HH':st.column_config.NumberColumn('Saldo (HH)',format='%.2f')})
         if rows:
-            st.bar_chart(pd.DataFrame(rows).set_index('Proyecto')[['Presupuesto_HH','HH_cargadas']],color=['#222c58','#137f81'],stack=False)
+            st.bar_chart(pd.DataFrame(rows).set_index('Proyecto')[['Presupuesto_HH','HH_cargadas']],color=['#13364a','#077e78'],stack=False)
     if u['role']=='admin':
         with st.expander('Guía del administrador · configura tu equipo en orden'):
             c1,c2,c3=st.columns(3)
@@ -253,12 +253,12 @@ if page=='Centro gerencial':
 elif page in ('Mis HH','Registrar horas'):
     section_note('Registro diario','Selecciona proyecto y actividad, indica las horas y describe el trabajo realizado. Máximo 12 HH por día.')
     projs=projects_access(False)
-    if not projs:st.info('No tienes proyectos activos asignados.')
+    if not projs:empty_state('No tienes proyectos activos asignados','Solicita al administrador acceso a un proyecto y sus actividades.','▦')
     else:
         pid=choose('1. Selecciona el proyecto',projs)
         acts=all_rows('''SELECT a.id,a.code,a.name FROM activities a JOIN activity_assignments aa ON aa.activity_id=a.id
             WHERE aa.user_id=:uid AND a.project_id=:pid AND a.active=1 ORDER BY a.code''',dict(uid=u['id'],pid=pid)) if pid else []
-        if not acts:st.warning('No tienes actividades autorizadas en este proyecto.')
+        if not acts:empty_state('No tienes actividades autorizadas','Solicita al administrador la asignación de las actividades de este proyecto.','▦')
         else:
             with st.form('new-entry',clear_on_submit=True):
                 activity_id=choose('2. Selecciona actividad',acts)
@@ -308,8 +308,8 @@ elif page=='Aprobaciones':
     c1,c2=st.columns(2)
     c1.metric('Registros por revisar',len(pending));c2.metric('Horas por revisar',f"{sum(r['quarters'] for r in pending)/4:,.2f} HH")
     section_note('Revisa antes de decidir','Aprobar valida las horas. Observar permite que el profesional corrija. Rechazar descarta el registro con un motivo.')
-    if not pending:st.success('Todo al día. No hay registros pendientes de revisión de otros profesionales.')
-    st.dataframe(pd.DataFrame([dict(ID=r['id'],Trabajador=r['worker'],Proyecto=r['project'],Actividad=r['activity'],Fecha=r['work_date'],HH=r['quarters']/4,Descripción=r['description']) for r in pending]),hide_index=True,use_container_width=True)
+    if not pending:empty_state('Bandeja al día','No hay horas pendientes que requieran tu aprobación.','✓')
+    if pending:st.dataframe(pd.DataFrame([dict(ID=r['id'],Trabajador=r['worker'],Proyecto=r['project'],Actividad=r['activity'],Fecha=r['work_date'],HH=r['quarters']/4,Descripción=r['description']) for r in pending]),hide_index=True,use_container_width=True)
     if pending:
         with st.form('approve'):
             eid=st.selectbox('Registro', [r['id'] for r in pending],format_func=lambda i:next(f"#{r['id']} · {r['worker']} · {r['project']} · {r['quarters']/4:.2f} HH" for r in pending if r['id']==i))

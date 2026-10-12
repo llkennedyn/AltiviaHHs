@@ -7,14 +7,14 @@ import streamlit as st
 ROOT = Path(__file__).parent
 LOGO = ROOT / 'assets' / 'altivia-logo.png'
 DESCRIPTIONS = {
-    'Centro gerencial': ('Visión general', 'Tus proyectos, sus avances y las decisiones que requieren atención.'),
+    'Centro gerencial': ('Visión general de tus proyectos', 'Consulta el presupuesto, las horas registradas y las revisiones pendientes de tu equipo.'),
     'Mis HH': ('Registro de trabajo', 'Registra tus horas, consulta su estado y corrige las observaciones.'),
     'HH por profesional': ('Equipo y dedicación', 'Consulta la dedicación de cada profesional por proyecto y periodo.'),
-    'Aprobaciones': ('Bandeja de revisión', 'Revisa el trabajo del equipo antes de incorporarlo al cierre.'),
-    'Presupuestos EDT': ('Control del presupuesto', 'Compara las horas previstas con el consumo de cada actividad.'),
+    'Aprobaciones': ('Bandeja de aprobaciones', 'Revisa el detalle de cada registro y decide si aprobar, observar o rechazar.'),
+    'Presupuestos EDT': ('Control de presupuestos EDT', 'Compara las horas previstas con el consumo de cada actividad.'),
     'Proyectos y actividades': ('Gestión de proyectos', 'Organiza proyectos, responsables, actividades y presupuestos.'),
     'Usuarios y tarifas': ('Equipo y tarifas', 'Administra accesos, tarifas por hora y actividades autorizadas.'),
-    'Importar Excel': ('Importación de presupuesto', 'Carga tu matriz EDT, revisa la vista previa y confirma la importación.'),
+    'Importar Excel': ('Importar matriz de presupuestos', 'Carga tu matriz EDT, revisa la vista previa y confirma la importación.'),
     'Liquidaciones': ('Cierre y liquidación', 'Convierte las horas aprobadas en un cierre verificable por profesional.'),
     'Auditoría': ('Trazabilidad', 'Consulta quién realizó cada cambio y cuándo ocurrió.'),
 }
@@ -25,6 +25,14 @@ DESCRIPTIONS.update({
     'Mi historial': ('Mi historial de horas', 'Consulta tus registros, su estado de revisión y las observaciones recibidas.'),
 })
 NAV_ICONS.update({'Registrar horas': '＋', 'Mi historial': '◷'})
+EYEBROWS = {
+    'Centro gerencial': 'RESUMEN EJECUTIVO', 'Mis HH': 'REGISTRO PERSONAL',
+    'Registrar horas': 'REGISTRO PERSONAL', 'Mi historial': 'HISTORIAL PERSONAL',
+    'HH por profesional': 'ANÁLISIS DEL EQUIPO', 'Aprobaciones': 'SUPERVISIÓN · FLUJO DE REVISIÓN',
+    'Presupuestos EDT': 'PRESUPUESTOS · EDT/WBS', 'Proyectos y actividades': 'PLANIFICACIÓN DE PROYECTOS',
+    'Usuarios y tarifas': 'ADMINISTRACIÓN DEL EQUIPO', 'Importar Excel': 'IMPORTACIÓN · EXCEL',
+    'Liquidaciones': 'CIERRE DEL PERIODO', 'Auditoría': 'CONTROL Y TRAZABILIDAD',
+}
 
 def apply_theme():
     st.markdown((ROOT / 'assets' / 'theme.css').read_text(encoding='utf-8'), unsafe_allow_html=True)
@@ -32,15 +40,22 @@ def apply_theme():
 def brand(sidebar=False):
     target = st.sidebar if sidebar else st
     encoded = base64.b64encode(LOGO.read_bytes()).decode()
-    target.markdown(f'<div class="brand"><img src="data:image/png;base64,{encoded}" alt="ALTIVIA Constructores"><div class="brand-label">HH CONTROL <span>GESTIÓN DE PROYECTOS</span></div></div>', unsafe_allow_html=True)
+    target.markdown(f'<div class="brand"><img src="data:image/png;base64,{encoded}" alt="ALTIVIA Constructores"><div class="brand-label">ALTIVIA <span>CONTROL DE HORAS</span></div></div>', unsafe_allow_html=True)
+
+def sidebar_identity(user):
+    roles={'admin':'Administrador','supervisor':'Supervisor','trabajador':'Trabajador'}
+    st.sidebar.markdown(f'<div class="sidebar-identity"><strong>{escape(user["name"])}</strong><span>{roles.get(user["role"],escape(user["role"]))}</span></div>',unsafe_allow_html=True)
 
 def page_header(page, user):
     title, subtitle = DESCRIPTIONS[page]
-    st.markdown(f'<div class="page-header"><div class="eyebrow">ALTIVIA / {escape(page.upper())}</div><h1>{title}</h1><p>{subtitle}</p><div class="page-user">{escape(user["name"])} · {escape(user["role"].capitalize())}</div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="page-header"><div class="eyebrow">{EYEBROWS[page]}</div><h1>{title}</h1><p>{subtitle}</p></div>', unsafe_allow_html=True)
 
 def login_intro():
     brand()
-    st.markdown('<div class="login-hero"><div class="eyebrow">CONTROL QUE ACOMPAÑA TU OBRA</div><h1>Cada hora cuenta.<br>Cada proyecto avanza.</h1><p>Un espacio para planificar el trabajo, acompañar al equipo y cerrar cada periodo con claridad.</p><div class="login-features"><span>01 · Presupuestos EDT</span><span>02 · Horas y aprobaciones</span><span>03 · Tarifas y liquidaciones</span></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="login-hero"><div class="eyebrow">PLATAFORMA DEL EQUIPO</div><h1>ALTIVIA<br>Control de horas</h1><p>Un espacio para registrar el trabajo realizado, consultar su estado y coordinar nuestros proyectos.</p><div class="login-features"><span>Registro de actividades</span><span>Seguimiento de tus envíos</span><span>Colaboración con tu equipo</span></div></div>', unsafe_allow_html=True)
+
+def empty_state(title, text, icon='◫'):
+    st.markdown(f'<div class="empty-state"><div class="empty-icon">{escape(icon)}</div><strong>{escape(title)}</strong><p>{escape(text)}</p></div>',unsafe_allow_html=True)
 
 def go(page):
     st.session_state['navigation'] = page
