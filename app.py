@@ -579,19 +579,31 @@ elif page=='Importar Excel':
                 proposed=pd.DataFrame([dict(Incluir=False,Fila=r['row'],EDT='',Actividad=r['name'],HH=r['budget']/4) for r in matrix['review']])
                 reviewed_rows=st.data_editor(proposed,disabled=['Fila','Actividad','HH'],hide_index=True,use_container_width=True,key='review_rows_'+import_key)
                 decisions=reviewed_rows.to_dict('records')
-            preview=resolve_review(matrix,decisions)
+            candidates=resolve_review(matrix,decisions)
+            st.subheader('Seleccionar actividades a importar')
+            st.caption('Desmarca Importar en las tareas que quieras excluir. Solo se guardarán las actividades seleccionadas y sus asignaciones; las actividades existentes que excluyas no se modifican.')
+            excluded_by_choice=[];preview=[]
+            if candidates:
+                activity_options=pd.DataFrame([dict(Importar=True,Fila=x['row'],EDT=x['code'],Actividad=x['name'],Presupuesto_HH=x['budget']/4,HH_por_asignar=x['unassigned']/4,Profesionales=', '.join(n for n,_ in x['cross'])) for x in candidates])
+                candidate_revision=hashlib.sha256(str([(x['row'],x['code']) for x in candidates]).encode()).hexdigest()[:12]
+                selected_rows=st.data_editor(activity_options,disabled=[c for c in activity_options.columns if c!='Importar'],column_config={'Importar':st.column_config.CheckboxColumn('Importar',help='Desmarca para excluir esta actividad de la carga.',default=True)},num_rows='fixed',hide_index=True,use_container_width=True,key='select_import_'+import_key+'_'+candidate_revision)
+                for item,choice in zip(candidates,selected_rows.to_dict('records')):
+                    (preview if choice['Importar'] else excluded_by_choice).append(item)
+            persons=list(dict.fromkeys((None,name) for item in preview for name,_ in item['cross']))
             with st.expander('Filas excluidas · encabezados y totales'):
                 excluded=[dict(Fila=r['row'],EDT=r['code'],Actividad=r['name'],Motivo=r['reason']) for r in matrix['excluded']]
                 excluded.extend(dict(Fila=r['row'],EDT='',Actividad=r['name'],Motivo='Sin EDT · excluida en la revisión') for r,d in zip(matrix['review'],decisions) if not d['Incluir'])
+                excluded.extend(dict(Fila=r['row'],EDT=r['code'],Actividad=r['name'],Motivo='Excluida de la importación por el administrador') for r in excluded_by_choice)
                 st.dataframe(pd.DataFrame(excluded),hide_index=True,use_container_width=True)
             total=sum(x['budget'] for x in preview)/4;unassigned=sum(x['unassigned'] for x in preview)/4
-            st.write(f"{len({normalized(n) for _,n in persons})} profesionales identificados · {len(preview)} actividades · {total:,.2f} HH presupuestadas.")
-            st.dataframe(pd.DataFrame([dict(Fila=x['row'],EDT=x['code'],Actividad=x['name'],Presupuesto_HH=x['budget']/4,HH_por_asignar=x['unassigned']/4,Profesionales=', '.join(n for n,_ in x['cross'])) for x in preview]),use_container_width=True,hide_index=True)
+            st.write(f"{len(preview)} de {len(candidates)} actividades seleccionadas · {len(persons)} profesionales asociados · {total:,.2f} HH a importar.")
+            if excluded_by_choice:st.info(f"Excluiste {len(excluded_by_choice)} actividades ({sum(r['budget'] for r in excluded_by_choice)/4:,.2f} HH). Tampoco se crearán usuarios que solo aparezcan en esas tareas.")
+            if not preview:st.info('Selecciona al menos una actividad para habilitar la importación.')
             if unassigned:st.warning(f'{unassigned:,.2f} HH corresponden a puestos TBD o sin nombre. Se conservan en el presupuesto, pero no crean usuarios ni autorizaciones; asígnalas después.')
             difference=matrix['source_total'] is not None and Decimal(str(total))!=matrix['source_total']
             if matrix['source_total'] is not None:
                 st.caption(f"Control de horas: total declarado en Excel {matrix['source_total']:,.2f} HH · actividades seleccionadas {total:,.2f} HH")
-            if difference:st.warning('El total de las actividades seleccionadas difiere del total declarado en Excel. Revisa las filas sin EDT y los resúmenes antes de confirmar.')
+            if difference:st.warning('El total seleccionado difiere del total declarado en Excel. Puede deberse a las tareas que desmarcaste; revisa también las filas sin EDT y los resúmenes antes de confirmar.')
             checked=st.checkbox('He revisado las filas excluidas y las horas sin colaborador asignado',key='review_confirm_'+import_key) if matrix['review'] or unassigned or difference else True
             known_names={norm(row['name']) for row in all_rows('SELECT name FROM users WHERE deleted=0')}
             new_people=[fullname for _,fullname in persons if norm(fullname) not in known_names]
@@ -600,7 +612,8 @@ elif page=='Importar Excel':
                 st.subheader('Revisar nombres de los nuevos colaboradores')
                 st.caption('Confirma la separación de nombres y apellidos antes de importar. Usuario: primer nombre. Contraseña inicial: primer apellido en minúsculas y sin tildes, incluso si tiene menos de 6 caracteres. Las cuentas existentes no cambian.')
                 proposed=pd.DataFrame([dict(Nombre_en_Excel=fullname,**name_parts(fullname)) for fullname in dict.fromkeys(new_people)])
-                reviewed=st.data_editor(proposed,disabled=['Nombre_en_Excel'],hide_index=True,use_container_width=True,num_rows='fixed',key=f"import_names_{pid}_{hashlib.sha256(file.getvalue()).hexdigest()[:12]}")
+                names_revision=hashlib.sha256(str(list(dict.fromkeys(new_people))).encode()).hexdigest()[:12]
+                reviewed=st.data_editor(proposed,disabled=['Nombre_en_Excel'],hide_index=True,use_container_width=True,num_rows='fixed',key='import_names_'+import_key+'_'+names_revision)
                 credential_plan={row['Nombre_en_Excel']:row for _,row in reviewed.iterrows()}
             st.warning('La importación sustituye asignaciones de las actividades incluidas. No sustituye la base completa. Verifica el proyecto.')
             if st.button('Confirmar importación de matriz',type='primary',disabled=not checked or not preview):

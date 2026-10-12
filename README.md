@@ -72,6 +72,8 @@ Para actualizar esta interfaz, conserva juntos `app.py`, `ui.py`, `assets/` y `.
 
 ## Importación de matrices extendidas
 
+En **Seleccionar actividades a importar**, desmarca **Importar** en las tareas que no desees cargar. Se actualizan las horas y profesionales asociados a la selección; los usuarios que solo figuran en tareas excluidas no se crean. Las actividades excluidas que ya existan en el proyecto permanecen intactas. Desmarcar todas las tareas deshabilita la confirmación.
+
 Los profesionales se detectan desde J hasta la última columna con encabezados o HH, sin el antiguo límite T. Se recorren todas las filas del libro. Las horas de una misma persona en varias columnas se suman por actividad. Se aceptan EDT numéricos o escritos como texto. Los presupuestos incluyen HH de puestos TBD o sin nombre, sin crear cuentas ficticias; esas HH quedan pendientes de asignar.
 
 La vista previa muestra las columnas y personas, las actividades, los puestos sin asignar y las filas excluidas con su motivo. Se omiten los resúmenes generales de la estructura (EDT terminados en 000 al inicio de un bloque), encabezados sin HH propias y fórmulas que suman otras filas. Un EDT terminado en 000 dentro del detalle, como el entregable 91000, se conserva. Las filas HORAS TOTALES y COSTO TOTAL no crean actividades.

@@ -114,3 +114,49 @@ def test_import_screen_requires_review_then_maps_late_users_and_full_budget(setu
     assert not any(r['name']=='TBD' for r in data['users'].values())
     assert {(r['user_id'],r['planned_quarters']) for r in data['activity_assignments'].values() if r['activity_id']==activity['id']}=={(3,8),(ana['id'],12)}
     assert not any(r['name']=='Uncoded heading' for r in data['activities'].values())
+
+
+def test_unchecked_tasks_leave_existing_data_and_exclusive_users_untouched(setup,monkeypatch):
+    from pathlib import Path
+    import streamlit as st
+    import db_sharepoint
+    from streamlit.testing.v1 import AppTest
+    _,store,engine=setup
+    monkeypatch.setattr(db_sharepoint,'_engine',engine);monkeypatch.setenv('DATA_BACKEND','sharepoint')
+    s=matrix();s.cell(5,10,'worker');s.cell(5,34,'Ana Paz Ramos')
+    s.cell(10,2,10110);s.cell(10,3,'Selected task');s.cell(10,10,2)
+    s.cell(11,2,10120);s.cell(11,3,'Excluded task');s.cell(11,34,9)
+    blob=payload(s)
+    class Upload:
+        name='synthetic_selection.xlsx'
+        def getvalue(self):return blob
+    monkeypatch.setattr(st,'file_uploader',lambda *args,**kwargs:Upload())
+    with engine.begin() as c:
+        old=c.execute("INSERT INTO activities(project_id,code,name,budget_quarters) VALUES(1,'10120','Keep original',100) RETURNING id").scalar_one()
+        c.execute('INSERT INTO activity_assignments(user_id,activity_id,planned_quarters) VALUES(3,:aid,55)',{'aid':old})
+    # AppTest does not serialize editable dataframes; supply the returned edit
+    # across reruns while exercising the actual confirmation and persistence.
+    original_editor=st.data_editor;selection={'exclude':set()}
+    def editor(data,*args,**kwargs):
+        result=original_editor(data,*args,**kwargs)
+        if str(kwargs.get('key','')).startswith('select_import_'):
+            result=result.copy()
+            for row in selection['exclude']:result.loc[row,'Importar']=False
+        return result
+    monkeypatch.setattr(st,'data_editor',editor)
+    app=AppTest.from_file(Path('app.py').resolve(),default_timeout=20);app.session_state['uid']=1
+    app.run().sidebar.radio[0].set_value('Importar Excel').run()
+    selection['exclude']={1}
+    app.run()
+    assert not app.exception and not app.error
+    assert not any(h.value=='Revisar nombres de los nuevos colaboradores' for h in app.subheader)
+    next(b for b in app.button if b.label=='Confirmar importación de matriz').click().run()
+    assert not app.exception and not app.error
+    data=store.snapshot()['data']
+    assert len(data['users'])==3
+    assert data['activities'][str(old)]['name']=='Keep original' and data['activities'][str(old)]['budget_quarters']==100
+    assert next(r for r in data['activity_assignments'].values() if r['activity_id']==old)['planned_quarters']==55
+    assert next(r for r in data['activities'].values() if r['code']=='10110')['budget_quarters']==8
+    selection['exclude']={0,1}
+    app.run()
+    assert next(b for b in app.button if b.label=='Confirmar importación de matriz').disabled
