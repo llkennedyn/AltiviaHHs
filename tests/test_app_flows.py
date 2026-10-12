@@ -43,3 +43,31 @@ def test_all_role_pages_render(setup,monkeypatch,uid,expected):
     for page in pages:
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, (page,list(at.exception))
+
+
+def test_worker_submission_and_supervisor_approval(setup,monkeypatch):
+    _, s, e = setup
+    monkeypatch.setattr(db_sharepoint,'_engine',e)
+    monkeypatch.setenv('DATA_BACKEND','sharepoint')
+    with e.begin() as c:
+        c.execute('INSERT INTO assignments(user_id,project_id) VALUES(3,1)')
+        c.execute('INSERT INTO activity_assignments(user_id,activity_id,planned_quarters) VALUES(3,1,40)')
+    worker=AppTest.from_file(Path('app.py').resolve(),default_timeout=20)
+    worker.session_state['uid']=3
+    worker.run().sidebar.radio[0].set_value('Mis HH').run()
+    worker.text_area[0].set_value('Synthetic engineering work')
+    worker.number_input[0].set_value(1.25)
+    next(b for b in worker.button if b.label=='Enviar para aprobación').click().run()
+    assert not worker.exception and not worker.error
+    assert s.snapshot()['data']['entries']['1']['state']=='pendiente'
+    reviewer=AppTest.from_file(Path('app.py').resolve(),default_timeout=20)
+    reviewer.session_state['uid']=2
+    reviewer.run().sidebar.radio[0].set_value('Aprobaciones').run()
+    next(b for b in reviewer.button if b.label=='Registrar decisión').click().run()
+    assert not reviewer.exception and not reviewer.error
+    entry=s.snapshot()['data']['entries']['1']
+    assert entry['state']=='aprobado' and entry['approval_by']==2 and entry['quarters']==5
+    reviewer.sidebar.radio[0].set_value('Presupuestos EDT').run()
+    table=reviewer.dataframe[0].value
+    assert table.iloc[0]['Presupuesto_HH']==100
+    assert table.iloc[0]['HH_cargadas']==1.25
