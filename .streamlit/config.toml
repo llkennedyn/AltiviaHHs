@@ -4,7 +4,10 @@ maxUploadSize = 15
 
 [theme]
 primaryColor = "#077E78"
-backgroundColor = "#E7EEF4"
-secondaryBackgroundColor = "#F1F4F8"
+backgroundColor = "#D1DFE9"
+secondaryBackgroundColor = "#FFFFFF"
 textColor = "#13364A"
 font = "sans serif"
+dataframeBorderColor = "#9AB0BE"
+dataframeHeaderBackgroundColor = "#13364A"
+dataframeHeaderTextColor = "#FFFFFF"
