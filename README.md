@@ -47,7 +47,7 @@ Las pruebas locales cubren conflictos, interrupciones, respuesta perdida, integr
 
 ## Comportamiento conservado
 
-Tarifa estándar congelada por línea al liquidar. Presupuesto total por actividad aunque se filtren fechas. Excel: hoja `Estimado de Costos`, profesionales J:T/fila 5, códigos/actividades B/C. Liquidaciones internas con reportes, sin integración bancaria. Recuperación de acceso mediante restablecimiento por un administrador; sin recuperación por correo ni MFA para usuarios locales.
+Tarifa estándar congelada por línea al liquidar. Presupuesto total por actividad aunque se filtren fechas. Excel: hoja `Estimado de Costos`, profesionales desde J hasta la última columna con datos/fila 5, códigos/actividades B/C. Liquidaciones internas con reportes, sin integración bancaria. Recuperación de acceso mediante restablecimiento por un administrador; sin recuperación por correo ni MFA para usuarios locales.
 # Interfaz profesional ALTIVIA
 
 La plataforma usa el logo corporativo y la paleta ALTIVIA: azul `#13364A`, turquesa `#077E78`, gris claro `#E7EEF4` y blanco. El inicio muestra «ALTIVIA · Control de horas». El centro gerencial muestra presupuesto, horas registradas, aprobadas y pendientes, tarjetas por proyecto y accesos directos a las acciones del administrador. Los filtros del reporte no limitan la bandeja de aprobación.
@@ -69,4 +69,12 @@ Para actualizar esta interfaz, conserva juntos `app.py`, `ui.py`, `assets/` y `.
 - **Recuperación:** abre Usuarios eliminados o Proyectos eliminados en su página administrativa. Los usuarios se recuperan inactivos y los proyectos desactivados; reactívalos expresamente cuando corresponda. Los informes históricos y liquidaciones conservan referencias a registros eliminados. Los registros anteriores de SharePoint se cargan con `deleted=0` sin migración destructiva.
 
 `python tools/admin_smoke.py` comprueba estas operaciones contra Graph exclusivamente en las listas `HH_TEST_`, ya aprovisionadas. Crea datos ficticios, verifica una lectura desde otra instancia y desactiva las cuentas de prueba al finalizar. Conserva los registros para auditoría; no escribe en las listas de producción `HH_`.
+
+## Importación de matrices extendidas
+
+Los profesionales se detectan desde J hasta la última columna con encabezados o HH, sin el antiguo límite T. Se recorren todas las filas del libro. Las horas de una misma persona en varias columnas se suman por actividad. Se aceptan EDT numéricos o escritos como texto. Los presupuestos incluyen HH de puestos TBD o sin nombre, sin crear cuentas ficticias; esas HH quedan pendientes de asignar.
+
+La vista previa muestra las columnas y personas, las actividades, los puestos sin asignar y las filas excluidas con su motivo. Se omiten los resúmenes generales de la estructura (EDT terminados en 000 al inicio de un bloque), encabezados sin HH propias y fórmulas que suman otras filas. Un EDT terminado en 000 dentro del detalle, como el entregable 91000, se conserva. Las filas HORAS TOTALES y COSTO TOTAL no crean actividades.
+
+Las filas con HH y sin EDT válido requieren revisión: puedes incluirlas asignando un código único o confirmar expresamente su exclusión. Las HH inválidas, EDT duplicados y fórmulas de actividades sin resultados guardados bloquean la importación; recalcula y guarda el archivo en Excel cuando corresponda. El total seleccionado se compara con HORAS TOTALES y cualquier diferencia se muestra antes de guardar. La importación sigue limitada al proyecto seleccionado y conserva las restricciones sobre actividades con horas liquidadas.
 

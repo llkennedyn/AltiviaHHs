@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 from werkzeug.security import generate_password_hash, check_password_hash
-from openpyxl import load_workbook
+from excel_import import read_matrix, resolve_review, normalized
+from openpyxl.utils import get_column_letter
 from db import engine, init_schema, one, all_rows, scalar, exec_sql, log, reset_context
 from sharepoint_graph import setting
 from access import pages_for_role
@@ -558,29 +559,40 @@ elif page=='Usuarios y tarifas':
 elif page=='Importar Excel':
     section_note('Antes de importar','Selecciona el proyecto destino. La vista previa te permitirá revisar actividades, profesionales y horas antes de guardar.')
     with st.expander('Formato requerido del archivo Excel'):
-        st.write('Hoja **Estimado de Costos**: EDT en columna B; actividad en C; profesionales en fila 5, columnas J:T; horas positivas en cada cruce. Se admiten archivos .xlsx.')
+        st.write('Hoja **Estimado de Costos**: EDT en columna B; actividad en C; profesionales en fila 5, desde J hasta la última columna con datos. Se recorren todas las filas de actividades. Los resúmenes y totales no se importan. Se admiten archivos .xlsx.')
     pid=choose('Proyecto destino',projects_access())
     file=st.file_uploader('Seleccionar libro .xlsx',type=['xlsx'])
     if file and pid:
         try:
-            wb=load_workbook(io.BytesIO(file.getvalue()),read_only=True,data_only=True)
-            if 'Estimado de Costos' not in wb.sheetnames:raise ValueError('No existe la hoja Estimado de Costos.')
-            ws=wb['Estimado de Costos'];persons=[(col,str(ws.cell(5,col).value).strip()) for col in range(10,21) if ws.cell(5,col).value and norm(ws.cell(5,col).value) not in ('tbd','por definir')]
-            preview=[]
-            for row in ws.iter_rows(min_row=10,values_only=True):
-                code=row[1] if len(row)>2 else None;title=row[2] if len(row)>2 else None
-                if isinstance(code,bool) or not isinstance(code,(int,float)) or not title:continue
-                code=str(int(code)) if float(code).is_integer() else str(code)
-                if code.endswith('000'):continue
-                cross=[]
-                for col,fullname in persons:
-                    val=row[col-1] if len(row)>=col else None
-                    if isinstance(val,(int,float)) and not isinstance(val,bool) and val>0:
-                        q=Decimal(str(val))*4
-                        if q==q.to_integral_value():cross.append((fullname,int(q)))
-                if cross:preview.append(dict(code=code,name=str(title).strip(),cross=cross,budget=sum(q for _,q in cross)))
-            st.write(f'{len(persons)} profesionales identificados · {len(preview)} actividades asignables.')
-            st.dataframe(pd.DataFrame([dict(EDT=x['code'],Actividad=x['name'],Presupuesto_HH=x['budget']/4,Profesionales=', '.join(n for n,_ in x['cross'])) for x in preview]),use_container_width=True,hide_index=True)
+            matrix=read_matrix(file.getvalue());persons=matrix['persons']
+            import_key=f"{pid}_{hashlib.sha256(file.getvalue()).hexdigest()[:12]}"
+            st.caption(f"Columnas revisadas: J–{get_column_letter(matrix['last_column'])} · Todas las filas hasta {matrix['last_row']}")
+            with st.expander('Profesionales y puestos detectados'):
+                st.dataframe(pd.DataFrame([dict(Columna=p['letter'],Profesional=p['name'] or 'Por asignar',Puesto=p['role'],Estado='Sin colaborador asignado' if p['unassigned'] else 'Identificado') for p in matrix['positions']]),hide_index=True,use_container_width=True)
+            if matrix['errors']:
+                for issue in matrix['errors']:st.error(issue)
+                st.error('Corrige los datos indicados y vuelve a cargar el archivo. No se guardó ningún cambio.')
+                st.stop()
+            decisions=[]
+            if matrix['review']:
+                st.warning('Hay filas con horas pero sin EDT válido. Inclúyelas asignando un código, o déjalas excluidas si son encabezados o resúmenes. No se descartarán sin tu revisión.')
+                proposed=pd.DataFrame([dict(Incluir=False,Fila=r['row'],EDT='',Actividad=r['name'],HH=r['budget']/4) for r in matrix['review']])
+                reviewed_rows=st.data_editor(proposed,disabled=['Fila','Actividad','HH'],hide_index=True,use_container_width=True,key='review_rows_'+import_key)
+                decisions=reviewed_rows.to_dict('records')
+            preview=resolve_review(matrix,decisions)
+            with st.expander('Filas excluidas · encabezados y totales'):
+                excluded=[dict(Fila=r['row'],EDT=r['code'],Actividad=r['name'],Motivo=r['reason']) for r in matrix['excluded']]
+                excluded.extend(dict(Fila=r['row'],EDT='',Actividad=r['name'],Motivo='Sin EDT · excluida en la revisión') for r,d in zip(matrix['review'],decisions) if not d['Incluir'])
+                st.dataframe(pd.DataFrame(excluded),hide_index=True,use_container_width=True)
+            total=sum(x['budget'] for x in preview)/4;unassigned=sum(x['unassigned'] for x in preview)/4
+            st.write(f"{len({normalized(n) for _,n in persons})} profesionales identificados · {len(preview)} actividades · {total:,.2f} HH presupuestadas.")
+            st.dataframe(pd.DataFrame([dict(Fila=x['row'],EDT=x['code'],Actividad=x['name'],Presupuesto_HH=x['budget']/4,HH_por_asignar=x['unassigned']/4,Profesionales=', '.join(n for n,_ in x['cross'])) for x in preview]),use_container_width=True,hide_index=True)
+            if unassigned:st.warning(f'{unassigned:,.2f} HH corresponden a puestos TBD o sin nombre. Se conservan en el presupuesto, pero no crean usuarios ni autorizaciones; asígnalas después.')
+            difference=matrix['source_total'] is not None and Decimal(str(total))!=matrix['source_total']
+            if matrix['source_total'] is not None:
+                st.caption(f"Control de horas: total declarado en Excel {matrix['source_total']:,.2f} HH · actividades seleccionadas {total:,.2f} HH")
+            if difference:st.warning('El total de las actividades seleccionadas difiere del total declarado en Excel. Revisa las filas sin EDT y los resúmenes antes de confirmar.')
+            checked=st.checkbox('He revisado las filas excluidas y las horas sin colaborador asignado',key='review_confirm_'+import_key) if matrix['review'] or unassigned or difference else True
             known_names={norm(row['name']) for row in all_rows('SELECT name FROM users WHERE deleted=0')}
             new_people=[fullname for _,fullname in persons if norm(fullname) not in known_names]
             credential_plan={}
@@ -591,7 +603,7 @@ elif page=='Importar Excel':
                 reviewed=st.data_editor(proposed,disabled=['Nombre_en_Excel'],hide_index=True,use_container_width=True,num_rows='fixed',key=f"import_names_{pid}_{hashlib.sha256(file.getvalue()).hexdigest()[:12]}")
                 credential_plan={row['Nombre_en_Excel']:row for _,row in reviewed.iterrows()}
             st.warning('La importación sustituye asignaciones de las actividades incluidas. No sustituye la base completa. Verifica el proyecto.')
-            if st.button('Confirmar importación de matriz',type='primary'):
+            if st.button('Confirmar importación de matriz',type='primary',disabled=not checked or not preview):
                 created_credentials=[]
                 with engine().begin() as c:
                     if not c.execute(text('SELECT id FROM projects WHERE id=:id AND deleted=0'),{'id':pid}).first():raise ValueError('El proyecto ya no está disponible.')
